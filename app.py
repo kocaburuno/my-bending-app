@@ -1,182 +1,179 @@
 import streamlit as st
-import plotly.graph_objects as go
+import pandas as pd
 import numpy as np
+import plotly.graph_objects as go
 
 # --- SAYFA AYARLARI ---
-st.set_page_config(page_title="Büküm Simülasyonu", layout="wide", page_icon="📐")
+st.set_page_config(page_title="Büküm Simülasyonu v3", layout="wide", page_icon="📐")
 
-# --- CSS VE TEMA ---
+# --- CSS (Görünüm İyileştirme) ---
 st.markdown("""
     <style>
-    .stButton>button {
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 10px;
+    }
+    .stTabs [data-baseweb="tab"] {
+        background-color: #f0f2f6;
+        border-radius: 4px;
+        padding: 10px 20px;
+    }
+    .stTabs [aria-selected="true"] {
         background-color: #0068C9;
         color: white;
-        border-radius: 5px;
-        width: 100%;
-    }
-    .metric-card {
-        background-color: #F0F2F6;
-        padding: 15px;
-        border-radius: 10px;
-        border-left: 5px solid #0068C9;
     }
     </style>
-    """, unsafe_allow_html=True)
+""", unsafe_allow_html=True)
+
+# --- MATEMATİK MOTORU (Çoklu Büküm İçin) ---
+def calculate_profile(df_steps, start_x=0, start_y=0):
+    """
+    Verilen uzunluk ve açı adımlarına göre 2D profil koordinatlarını çıkarır.
+    """
+    x_coords = [start_x]
+    y_coords = [start_y]
+    
+    current_angle = 0  # Başlangıç açısı (yatay)
+    
+    for index, row in df_steps.iterrows():
+        length = row['Uzunluk (mm)']
+        bend_angle = row['Büküm Açısı (°)'] # 0 ise düz gider
+        
+        # Büküm yönü: Pozitif açı yukarı, Negatif aşağı büküm (Basit mantık)
+        # Büküm açısı, önceki doğrultuya göre sapmadır.
+        
+        # Yeni noktanın hesabı
+        # Not: Büküm açısı (bend_angle) kadar dönüyoruz
+        # Makine mantığında 180 derece düzdür, 90 derece diktir.
+        # Matematiksel hesap için: Sapma açısı = (180 - Makine Açısı)
+        
+        deviation = 180 - bend_angle
+        current_angle += deviation 
+        
+        rad = np.radians(current_angle)
+        
+        new_x = x_coords[-1] + length * np.cos(rad)
+        new_y = y_coords[-1] + length * np.sin(rad)
+        
+        x_coords.append(new_x)
+        y_coords.append(new_y)
+        
+    return x_coords, y_coords
+
+# --- GRAFİK ÇİZİCİ ---
+def plot_profile(x, y, title="Profil Önizleme"):
+    fig = go.Figure()
+    
+    # Parça Çizgisi
+    fig.add_trace(go.Scatter(
+        x=x, y=y,
+        mode='lines+markers',
+        line=dict(color='#0068C9', width=4),
+        marker=dict(size=8, color='red'),
+        name='Sac Profili'
+    ))
+    
+    # Eşit ölçeklendirme (Parça bozulmasın diye)
+    fig.update_layout(
+        title=title,
+        xaxis=dict(title="X (mm)", showgrid=True, zeroline=True),
+        yaxis=dict(title="Y (mm)", showgrid=True, zeroline=True, scaleanchor="x", scaleratio=1),
+        height=500,
+        margin=dict(l=20, r=20, t=40, b=20),
+        plot_bgcolor='white',
+        hovermode="x unified"
+    )
+    return fig
 
 # --- ANA UYGULAMA ---
+st.title("🏭 CNC Büküm Stüdyosu")
 
-st.title("📐 Hassas Büküm Planlayıcı")
-st.markdown("Malzeme ve ölçüleri girin, büküm sonucunu sabit perspektifte izleyin.")
+# Sekmeler
+tab1, tab2, tab3 = st.tabs(["🔹 Tek Büküm", "⛓️ Çoklu Büküm (Profil)", "📦 Çoklu Eksen (3D)"])
 
-col_input, col_sim = st.columns([1, 2])
-
-with col_input:
-    st.subheader("⚙️ Parametreler")
+# --- 1. SEKME: TEK BÜKÜM ---
+with tab1:
+    col1, col2 = st.columns([1, 2])
     
-    # Malzeme
-    material = st.selectbox("Malzeme", ["Siyah Sac (ST37)", "Paslanmaz (304)", "Alüminyum"])
-    thickness = st.number_input("Kalınlık (mm)", 0.5, 20.0, 2.0, 0.5)
-    
-    st.markdown("---")
-    
-    # Ölçü Tipi
-    measure_type = st.radio("Ölçü Tipi", ["Dış Ölçü (Outside)", "İç Ölçü (Inside)"], horizontal=True)
-    
-    # Kenar Uzunlukları
-    l1 = st.number_input("Sol Kenar (L1) mm", min_value=10.0, value=50.0)
-    l2 = st.number_input("Sağ Kenar (L2) mm", min_value=10.0, value=50.0)
-    
-    # Açı
-    angle = st.slider("Büküm Açısı (°)", 30, 180, 90)
-    
-    st.markdown("---")
-    
-    # V Kalıp Seçimi (Otomatik Öneri)
-    suggested_v = int(thickness * 8) 
-    std_v = [6, 8, 10, 12, 16, 20, 25, 32, 40, 50, 60, 80]
-    best_v = min(std_v, key=lambda x: abs(x - suggested_v))
-    
-    v_die_width = st.selectbox("Alt Kalıp (V)", std_v, index=std_v.index(best_v) if best_v in std_v else 0)
-    
-    st.caption(f"ℹ️ Önerilen V: {suggested_v}mm | Kullanılan: V{v_die_width}")
-
-with col_sim:
-    # --- HESAPLAMALAR VE GÖRSELLEŞTİRME ---
-    
-    # İç/Dış Ölçü Düzeltmesi (Görsel için)
-    if "Dış" in measure_type:
-        vis_l1 = l1 - thickness
-        vis_l2 = l2 - thickness
-    else:
-        vis_l1 = l1
-        vis_l2 = l2
-
-    width_plate = 30 # Daha ince, şematik görünüm için derinliği azalttım
-
-    # 1. SAC PARÇASI (SHEET)
-    # Sol kanat (düzlemde sabit)
-    sheet_x = [-vis_l1, 0, 0, -vis_l1]
-    sheet_y = [0, 0, width_plate, width_plate]
-    sheet_z = [0, 0, 0, 0] 
-    
-    # Sağ kanat (Açıya göre kalkar)
-    rad = np.radians(180 - angle)
-    
-    # Sağ kanat koordinatları
-    r_wing_x = [0, vis_l2 * np.cos(rad), vis_l2 * np.cos(rad), 0]
-    r_wing_y = [0, 0, width_plate, width_plate]
-    r_wing_z = [0, vis_l2 * np.sin(rad), vis_l2 * np.sin(rad), 0]
-
-    fig = go.Figure()
-
-    # SOL KANAT
-    fig.add_trace(go.Mesh3d(
-        x=sheet_x, y=sheet_y, z=sheet_z,
-        color='#3498db', name='Sac (Sol)', opacity=1.0, flatshading=True
-    ))
-    # SAĞ KANAT
-    fig.add_trace(go.Mesh3d(
-        x=r_wing_x, y=r_wing_y, z=r_wing_z,
-        color='#2980b9', name='Sac (Sağ)', opacity=1.0, flatshading=True
-    ))
-    
-    # 2. ÜST BIÇAK (PUNCH) - Şematik Çizim
-    # Bıçak sadece profil çizgisi olarak görünsün (Daha teknik görünüm)
-    punch_h = 40
-    
-    # Bıçak Üçgeni (Ön Yüz)
-    fig.add_trace(go.Scatter3d(
-        x=[-5, 5, 0, -5],
-        y=[0, 0, 0, 0], # Sadece ön kesit
-        z=[20, 20, 0.8, 20],
-        mode='lines', line=dict(color='#2c3e50', width=4), name='Bıçak Profil'
-    ))
-    # Bıçak Gövdesi (Blok)
-    fig.add_trace(go.Mesh3d(
-        x=[-5, 5, 0, -5, 5, 0],
-        y=[0, 0, 0, width_plate, width_plate, width_plate],
-        z=[20, 20, 0.8, 20, 20, 0.8],
-        color='#bdc3c7', name='Bıçak'
-    ))
-
-    # 3. ALT KALIP (V-DIE) - Şematik
-    die_half_w = v_die_width / 2 + 5
-    
-    # V Yarığı Çizgileri (Siyah kontur)
-    vx = [-die_half_w, -v_die_width/2, 0, v_die_width/2, die_half_w]
-    vz = [-thickness, -thickness, -thickness - (v_die_width/2 * np.tan(np.radians(45))), -thickness, -thickness]
-    
-    # Kalıp Ön Çizgisi
-    fig.add_trace(go.Scatter3d(
-        x=vx, y=[0]*5, z=vz,
-        mode='lines', line=dict(color='black', width=5), name='Kalıp Profil'
-    ))
-    
-    # Kalıp Gövdesi (Dolgu)
-    fig.add_trace(go.Mesh3d(
-        x=[-die_half_w, die_half_w, die_half_w, -die_half_w],
-        y=[0, 0, width_plate, width_plate],
-        z=[-thickness-20, -thickness-20, -thickness, -thickness],
-        color='#ecf0f1', name='Kalıp Gövdesi'
-    ))
-
-    # SABİT KAMERA VE GÖRÜNÜM AYARLARI
-    camera = dict(
-        eye=dict(x=0, y=-2.5, z=0.5), # Tam karşıdan/profil hafif açılı bakış
-        center=dict(x=0, y=0, z=0),
-        up=dict(x=0, y=0, z=1)
-    )
-
-    fig.update_layout(
-        scene=dict(
-            xaxis=dict(visible=False), # Eksenleri gizle
-            yaxis=dict(visible=False),
-            zaxis=dict(visible=False),
-            camera=camera,
-            aspectmode='data' # Gerçek oranları koru
-        ),
-        margin=dict(r=0, l=0, b=0, t=30),
-        showlegend=False,
-        paper_bgcolor='rgba(0,0,0,0)', # Şeffaf arka plan
-        plot_bgcolor='rgba(0,0,0,0)'
-    )
-
-    # config={'staticPlot': True} ile tamamen hareketsiz resim yapıyoruz
-    st.plotly_chart(fig, use_container_width=True, config={'staticPlot': True})
-    
-    # SONUÇ TABLOSU
-    st.markdown("### 📊 Teknik Detaylar")
-    res_col1, res_col2 = st.columns(2)
-    with res_col1:
-        st.info(f"**V-Kanalı:** {v_die_width} mm")
-        st.info(f"**Üst Bıçak:** R0.8 mm")
-    with res_col2:
-        # Basit K faktörü hesabı (Açınım için)
-        k = 0.35 # Ortalama
-        deduction = 2 * (np.tan(np.radians(180-angle)/2)) * (thickness + 0.8) - (np.pi * angle/180 * (0.8 + k * thickness))
-        # Negatif çıkarsa sıfırla (basit koruma)
-        if deduction < 0: deduction = 0
+    with col1:
+        st.subheader("Tek Büküm Ayarları")
+        t_thick = st.number_input("Sac Kalınlığı (mm)", 0.5, 20.0, 2.0, key="t1")
+        t_l1 = st.number_input("Sol Kenar (mm)", 10.0, 1000.0, 50.0, key="t1_l1")
+        t_l2 = st.number_input("Sağ Kenar (mm)", 10.0, 1000.0, 50.0, key="t1_l2")
+        t_angle = st.slider("Büküm Açısı (°)", 0, 180, 90, key="t1_ang")
         
-        flat_len = (l1 + l2) - deduction
-        st.success(f"**Açınım Boyu:** {flat_len:.1f} mm")
-        st.warning(f"**Büküm Farkı:** -{deduction:.2f} mm")
+        # Basit Görselleştirme Verisi
+        df_single = pd.DataFrame({
+            'Uzunluk (mm)': [t_l1, t_l2],
+            'Büküm Açısı (°)': [180, t_angle] # İlk parça düz (180), ikinci parça açı kadar döner
+        })
+        
+    with col2:
+        xs, ys = calculate_profile(df_single)
+        st.plotly_chart(plot_profile(xs, ys, "Tek Büküm Yan Görünüş"), use_container_width=True)
+        
+        # Hesaplamalar
+        k_factor = 0.35
+        # Basit açınım: L1 + L2 - Büküm Payı
+        deduction = 2 * (np.tan(np.radians(180-t_angle)/2)) * (t_thick) # Basitleştirilmiş
+        flat_l = t_l1 + t_l2 - deduction
+        st.info(f"📏 Tahmini Açınım Boyu: **{flat_l:.2f} mm**")
+
+# --- 2. SEKME: ÇOKLU BÜKÜM (TABLO İLE) ---
+with tab2:
+    st.markdown("### 📝 Adım Adım Büküm Planlayıcı")
+    st.caption("Aşağıdaki tablodan ölçüleri değiştirin, grafik otomatik güncellenir. 'Stock' bir U profili yüklendi.")
+    
+    col_table, col_graph = st.columns([1, 2])
+    
+    with col_table:
+        # STOCK PARÇA (Varsayılan Veri)
+        # Bir U Profili örneği: 50mm düz -> 90 derece dön -> 100mm düz -> 90 derece dön -> 50mm düz
+        default_data = pd.DataFrame([
+            {"Sıra": 1, "Uzunluk (mm)": 50.0, "Büküm Açısı (°)": 180}, # Başlangıç düzlemi (Referans)
+            {"Sıra": 2, "Uzunluk (mm)": 100.0, "Büküm Açısı (°)": 90}, # 1. Büküm
+            {"Sıra": 3, "Uzunluk (mm)": 50.0, "Büküm Açısı (°)": 90},  # 2. Büküm
+            {"Sıra": 4, "Uzunluk (mm)": 30.0, "Büküm Açısı (°)": 135}, # 3. Büküm (Açık)
+        ])
+        
+        # Veri Editörü (Kullanıcı satır ekleyip silebilir)
+        edited_df = st.data_editor(
+            default_data, 
+            num_rows="dynamic", 
+            hide_index=True,
+            column_config={
+                "Büküm Açısı (°)": st.column_config.NumberColumn(
+                    "Büküm Açısı",
+                    help="Makine açısı (180 düz, 90 dik)",
+                    min_value=0,
+                    max_value=180,
+                    step=1
+                )
+            }
+        )
+        
+        m_thick = st.number_input("Sac Kalınlığı (mm)", 0.5, 20.0, 1.5, key="m_th")
+
+    with col_graph:
+        # Editörden gelen veriyle çizim yap
+        mx, my = calculate_profile(edited_df)
+        st.plotly_chart(plot_profile(mx, my, "Çoklu Büküm Profil Kesiti"), use_container_width=True)
+        
+        total_len = edited_df["Uzunluk (mm)"].sum()
+        st.success(f"Toplam Çizgisel Uzunluk (Kayıpsız): {total_len} mm")
+
+# --- 3. SEKME: ÇOKLU EKSEN (PLACEHOLDER) ---
+with tab3:
+    st.warning("🚧 Bu modül geliştirme aşamasındadır.")
+    st.markdown("Burada parçanın sadece X-Y düzleminde değil, Z ekseninde de dönüşleri simüle edilecektir.")
+    
+    # Basit bir 3D Kutu temsili (Place holder)
+    fig_3d = go.Figure(data=[go.Mesh3d(
+        x=[0, 1, 1, 0, 0, 1, 1, 0],
+        y=[0, 0, 1, 1, 0, 0, 1, 1],
+        z=[0, 0, 0, 0, 1, 1, 1, 1],
+        color='lightpink',
+        opacity=0.50,
+        flatshading=True
+    )])
+    fig_3d.update_layout(title="3D Çoklu Eksen Önizleme (Demo)")
+    st.plotly_chart(fig_3d, use_container_width=True)
