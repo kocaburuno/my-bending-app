@@ -1,179 +1,141 @@
 import streamlit as st
-import pandas as pd
-import numpy as np
 import plotly.graph_objects as go
+import numpy as np
 
 # --- SAYFA AYARLARI ---
-st.set_page_config(page_title="Büküm Simülasyonu v3", layout="wide", page_icon="📐")
+st.set_page_config(page_title="Basit Büküm Kesiti", layout="centered", page_icon="📐")
 
-# --- CSS (Görünüm İyileştirme) ---
+# --- CSS (Gereksiz boşlukları kaldırma) ---
 st.markdown("""
     <style>
-    .stTabs [data-baseweb="tab-list"] {
-        gap: 10px;
-    }
-    .stTabs [data-baseweb="tab"] {
-        background-color: #f0f2f6;
-        border-radius: 4px;
-        padding: 10px 20px;
-    }
-    .stTabs [aria-selected="true"] {
-        background-color: #0068C9;
-        color: white;
-    }
+    .block-container {padding-top: 2rem; padding-bottom: 2rem;}
     </style>
 """, unsafe_allow_html=True)
 
-# --- MATEMATİK MOTORU (Çoklu Büküm İçin) ---
-def calculate_profile(df_steps, start_x=0, start_y=0):
+# --- MATEMATİK VE GEOMETRİ ---
+def get_bend_polygon(L1, L2, angle_deg, thickness):
     """
-    Verilen uzunluk ve açı adımlarına göre 2D profil koordinatlarını çıkarır.
+    Sacın et kalınlığını da hesaba katarak 2D köşe noktalarını hesaplar.
     """
-    x_coords = [start_x]
-    y_coords = [start_y]
+    # Açıyı radyana çevir (Büküm açısı makine dilinde: 180 düz, 90 dik)
+    # Geometrik hesap için sapma açısını kullanıyoruz.
+    bend_rad = np.radians(180 - angle_deg)
     
-    current_angle = 0  # Başlangıç açısı (yatay)
+    # 1. PARÇA (SOL - SABİT)
+    # Orijin (0,0) bükümün iç köşesi olsun.
+    # Sol parça sola doğru uzanır (-X yönü)
+    p1_inner = [-L1, 0]
+    p2_inner = [0, 0] # Büküm noktası
     
-    for index, row in df_steps.iterrows():
-        length = row['Uzunluk (mm)']
-        bend_angle = row['Büküm Açısı (°)'] # 0 ise düz gider
+    # 2. PARÇA (SAĞ - HAREKETLİ)
+    # Açı kadar dönmüş vektör
+    p3_inner = [
+        L2 * np.cos(bend_rad),
+        L2 * np.sin(bend_rad)
+    ]
+    
+    # DIŞ KONTUR HESABI (OFFSET)
+    # Basit geometri: İç hatlara dik vektörler ekleyerek dış hattı buluyoruz.
+    
+    # Sol parça dış hattı (Y ekseninde -thickness kadar aşağıda)
+    p1_outer = [-L1, -thickness]
+    
+    # Sağ parça dış hattı
+    # Vektörün dikine thickness kadar öteleme
+    dx = -thickness * np.sin(bend_rad)
+    dy = thickness * np.cos(bend_rad)
+    
+    p3_outer = [p3_inner[0] + dx, p3_inner[1] + dy]
+    
+    # Dış köşe birleşimi (Kesişim noktası)
+    # Matematiksel olarak köşe sivri olacak (Basit görünüm için)
+    # Sol parça alt çizgisi: y = -thickness
+    # Sağ parça alt çizgisi eğimi: tan(angle)
+    
+    # Köşe koordinatı (Trigonometrik çözüm)
+    if angle_deg == 180: # Düz ise
+        corner_outer = [0, -thickness]
+    else:
+        # Dış köşe, iç köşeye göre açıortayda, kalınlık/sin(yarım_açı) kadar uzaktadır.
+        half_angle = (180 - angle_deg) / 2
+        dist_to_corner = thickness / np.cos(np.radians(half_angle))
         
-        # Büküm yönü: Pozitif açı yukarı, Negatif aşağı büküm (Basit mantık)
-        # Büküm açısı, önceki doğrultuya göre sapmadır.
+        # Açıortay yönü
+        bisector_angle = np.radians(180 - angle_deg) / 2 - np.pi/2 # Aşağı doğru
         
-        # Yeni noktanın hesabı
-        # Not: Büküm açısı (bend_angle) kadar dönüyoruz
-        # Makine mantığında 180 derece düzdür, 90 derece diktir.
-        # Matematiksel hesap için: Sapma açısı = (180 - Makine Açısı)
+        cx = 0 + (thickness / np.sin(np.radians((180-angle_deg)/2))) * np.cos(np.radians(270 + (180-angle_deg)/2))
+        # Basitleştirilmiş köşe çizimi için hileli yöntem (Görsel temiz olsun diye):
+        # Dış hattı kapatmak için L1 dış -> Köşe -> L2 dış sırasını takip edeceğiz.
+        # Bu örnekte "Sivri" birleşim yerine "Küt" birleşim yapmıyoruz, görsel temiz olsun.
         
-        deviation = 180 - bend_angle
-        current_angle += deviation 
-        
-        rad = np.radians(current_angle)
-        
-        new_x = x_coords[-1] + length * np.cos(rad)
-        new_y = y_coords[-1] + length * np.sin(rad)
-        
-        x_coords.append(new_x)
-        y_coords.append(new_y)
-        
-    return x_coords, y_coords
+        # Kesişim noktası hesabı
+        # Line 1: y = -thickness
+        # Line 2 passing through p3_outer with slope tan(rad)
+        # y - y3 = m(x - x3) => x = (y - y3)/m + x3
+        m = np.tan(bend_rad)
+        if abs(m) < 0.001: m = 0.001
+        corner_x = (-thickness - p3_outer[1]) / m + p3_outer[0]
+        corner_outer = [corner_x, -thickness]
 
-# --- GRAFİK ÇİZİCİ ---
-def plot_profile(x, y, title="Profil Önizleme"):
-    fig = go.Figure()
+    # POLİGON NOKTALARI (Saat yönünde çiziyoruz)
+    x_pts = [p1_inner[0], p2_inner[0], p3_inner[0], p3_outer[0], corner_outer[0], p1_outer[0], p1_inner[0]]
+    y_pts = [p1_inner[1], p2_inner[1], p3_inner[1], p3_outer[1], corner_outer[1], p1_outer[1], p1_inner[1]]
     
-    # Parça Çizgisi
-    fig.add_trace(go.Scatter(
-        x=x, y=y,
-        mode='lines+markers',
-        line=dict(color='#0068C9', width=4),
-        marker=dict(size=8, color='red'),
-        name='Sac Profili'
-    ))
-    
-    # Eşit ölçeklendirme (Parça bozulmasın diye)
-    fig.update_layout(
-        title=title,
-        xaxis=dict(title="X (mm)", showgrid=True, zeroline=True),
-        yaxis=dict(title="Y (mm)", showgrid=True, zeroline=True, scaleanchor="x", scaleratio=1),
-        height=500,
-        margin=dict(l=20, r=20, t=40, b=20),
-        plot_bgcolor='white',
-        hovermode="x unified"
-    )
-    return fig
+    return x_pts, y_pts
 
-# --- ANA UYGULAMA ---
-st.title("🏭 CNC Büküm Stüdyosu")
+# --- ARAYÜZ ---
 
-# Sekmeler
-tab1, tab2, tab3 = st.tabs(["🔹 Tek Büküm", "⛓️ Çoklu Büküm (Profil)", "📦 Çoklu Eksen (3D)"])
+st.title("Hızlı Büküm Kesiti")
 
-# --- 1. SEKME: TEK BÜKÜM ---
-with tab1:
-    col1, col2 = st.columns([1, 2])
-    
-    with col1:
-        st.subheader("Tek Büküm Ayarları")
-        t_thick = st.number_input("Sac Kalınlığı (mm)", 0.5, 20.0, 2.0, key="t1")
-        t_l1 = st.number_input("Sol Kenar (mm)", 10.0, 1000.0, 50.0, key="t1_l1")
-        t_l2 = st.number_input("Sağ Kenar (mm)", 10.0, 1000.0, 50.0, key="t1_l2")
-        t_angle = st.slider("Büküm Açısı (°)", 0, 180, 90, key="t1_ang")
-        
-        # Basit Görselleştirme Verisi
-        df_single = pd.DataFrame({
-            'Uzunluk (mm)': [t_l1, t_l2],
-            'Büküm Açısı (°)': [180, t_angle] # İlk parça düz (180), ikinci parça açı kadar döner
-        })
-        
-    with col2:
-        xs, ys = calculate_profile(df_single)
-        st.plotly_chart(plot_profile(xs, ys, "Tek Büküm Yan Görünüş"), use_container_width=True)
-        
-        # Hesaplamalar
-        k_factor = 0.35
-        # Basit açınım: L1 + L2 - Büküm Payı
-        deduction = 2 * (np.tan(np.radians(180-t_angle)/2)) * (t_thick) # Basitleştirilmiş
-        flat_l = t_l1 + t_l2 - deduction
-        st.info(f"📏 Tahmini Açınım Boyu: **{flat_l:.2f} mm**")
+# Girdiler (Yan yana ve temiz)
+c1, c2, c3, c4 = st.columns(4)
+t = c1.number_input("Kalınlık (mm)", 0.5, 20.0, 2.0)
+l1 = c2.number_input("Sol Kenar (mm)", 10.0, 500.0, 50.0)
+l2 = c3.number_input("Sağ Kenar (mm)", 10.0, 500.0, 50.0)
+angle = c4.number_input("Açı (°)", 0, 180, 90)
 
-# --- 2. SEKME: ÇOKLU BÜKÜM (TABLO İLE) ---
-with tab2:
-    st.markdown("### 📝 Adım Adım Büküm Planlayıcı")
-    st.caption("Aşağıdaki tablodan ölçüleri değiştirin, grafik otomatik güncellenir. 'Stock' bir U profili yüklendi.")
-    
-    col_table, col_graph = st.columns([1, 2])
-    
-    with col_table:
-        # STOCK PARÇA (Varsayılan Veri)
-        # Bir U Profili örneği: 50mm düz -> 90 derece dön -> 100mm düz -> 90 derece dön -> 50mm düz
-        default_data = pd.DataFrame([
-            {"Sıra": 1, "Uzunluk (mm)": 50.0, "Büküm Açısı (°)": 180}, # Başlangıç düzlemi (Referans)
-            {"Sıra": 2, "Uzunluk (mm)": 100.0, "Büküm Açısı (°)": 90}, # 1. Büküm
-            {"Sıra": 3, "Uzunluk (mm)": 50.0, "Büküm Açısı (°)": 90},  # 2. Büküm
-            {"Sıra": 4, "Uzunluk (mm)": 30.0, "Büküm Açısı (°)": 135}, # 3. Büküm (Açık)
-        ])
-        
-        # Veri Editörü (Kullanıcı satır ekleyip silebilir)
-        edited_df = st.data_editor(
-            default_data, 
-            num_rows="dynamic", 
-            hide_index=True,
-            column_config={
-                "Büküm Açısı (°)": st.column_config.NumberColumn(
-                    "Büküm Açısı",
-                    help="Makine açısı (180 düz, 90 dik)",
-                    min_value=0,
-                    max_value=180,
-                    step=1
-                )
-            }
-        )
-        
-        m_thick = st.number_input("Sac Kalınlığı (mm)", 0.5, 20.0, 1.5, key="m_th")
+# --- ÇİZİM ---
+x_poly, y_poly = get_bend_polygon(l1, l2, angle, t)
 
-    with col_graph:
-        # Editörden gelen veriyle çizim yap
-        mx, my = calculate_profile(edited_df)
-        st.plotly_chart(plot_profile(mx, my, "Çoklu Büküm Profil Kesiti"), use_container_width=True)
-        
-        total_len = edited_df["Uzunluk (mm)"].sum()
-        st.success(f"Toplam Çizgisel Uzunluk (Kayıpsız): {total_len} mm")
+fig = go.Figure()
 
-# --- 3. SEKME: ÇOKLU EKSEN (PLACEHOLDER) ---
-with tab3:
-    st.warning("🚧 Bu modül geliştirme aşamasındadır.")
-    st.markdown("Burada parçanın sadece X-Y düzleminde değil, Z ekseninde de dönüşleri simüle edilecektir.")
-    
-    # Basit bir 3D Kutu temsili (Place holder)
-    fig_3d = go.Figure(data=[go.Mesh3d(
-        x=[0, 1, 1, 0, 0, 1, 1, 0],
-        y=[0, 0, 1, 1, 0, 0, 1, 1],
-        z=[0, 0, 0, 0, 1, 1, 1, 1],
-        color='lightpink',
-        opacity=0.50,
-        flatshading=True
-    )])
-    fig_3d.update_layout(title="3D Çoklu Eksen Önizleme (Demo)")
-    st.plotly_chart(fig_3d, use_container_width=True)
+# Dolgulu Alan (Sac Kesiti)
+fig.add_trace(go.Scatter(
+    x=x_poly, 
+    y=y_poly,
+    fill='toself', # İçini boya
+    fillcolor='#0068C9',
+    line=dict(color='black', width=2),
+    mode='lines',
+    name='Sac'
+))
+
+# Ölçü Okları / Yazıları (Basit annotation)
+fig.add_annotation(x=-l1/2, y=t*2, text=f"L1: {l1}mm", showarrow=False, font=dict(size=14))
+# Sağ taraf için dinamik yazı konumu
+rad = np.radians(180 - angle)
+mid_x = (l2/2) * np.cos(rad)
+mid_y = (l2/2) * np.sin(rad)
+fig.add_annotation(x=mid_x, y=mid_y + t*2, text=f"L2: {l2}mm", showarrow=False, font=dict(size=14))
+
+# Eksenleri sabitle (Auto-Fit mantığı)
+# Grafiğin etrafına %10 boşluk bırakarak sınırları belirle
+min_x, max_x = min(x_poly), max(x_poly)
+min_y, max_y = min(y_poly), max(y_poly)
+margin_x = (max_x - min_x) * 0.2
+margin_y = (max_y - min_y) * 0.2
+
+fig.update_layout(
+    xaxis=dict(range=[min_x - margin_x, max_x + margin_x], showgrid=False, zeroline=False, visible=False),
+    yaxis=dict(range=[min_y - margin_y, max_y + margin_y], showgrid=False, zeroline=False, visible=False, scaleanchor="x", scaleratio=1),
+    margin=dict(l=0, r=0, t=30, b=0),
+    height=400, # Sabit yükseklik
+    paper_bgcolor="white",
+    plot_bgcolor="white",
+    dragmode=False # Zoom/Pan kilitli
+)
+
+st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False}) # Araç çubuğunu gizle
+
+# Alt Bilgi
+st.info(f"📏 **Toplam Açınım (Tahmini):** {l1 + l2 - (2 * t):.2f} mm (K Faktörü hariç kaba hesap)")
