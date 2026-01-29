@@ -4,234 +4,227 @@ import numpy as np
 import pandas as pd
 
 # --- SAYFA AYARLARI ---
-st.set_page_config(page_title="Çoklu Büküm Simülasyonu", layout="wide", page_icon="📐")
+st.set_page_config(page_title="Pratik Büküm Simülatörü", layout="wide", page_icon="📐")
 
-# --- CSS (Tablo ve Input Düzenlemeleri) ---
+# --- CSS (Görünüm Düzenleme) ---
 st.markdown("""
     <style>
     .block-container {padding-top: 1rem; padding-bottom: 2rem;}
     </style>
 """, unsafe_allow_html=True)
 
-# --- MATEMATİK MOTORU (TURTLE GRAPHICS MANTIĞI) ---
-def rotate_point(x, y, angle_rad):
-    """Bir noktayı orijin etrafında döndürür."""
-    xr = x * np.cos(angle_rad) - y * np.sin(angle_rad)
-    yr = x * np.sin(angle_rad) + y * np.cos(angle_rad)
-    return xr, yr
-
-def generate_multi_bend_profile(df_steps, thickness, blade_radius):
+# --- MATEMATİK MOTORU (YENİLENMİŞ - ZİNCİRLEME SİSTEM) ---
+def generate_smart_profile(df_steps, thickness, inner_radius):
     """
-    Adım tablosunu okuyarak bükülmüş sacın dış hat noktalarını oluşturur.
-    Mantık: 'Turtle Graphics' gibi ilerleyip, üst ve alt yüzey noktalarını ayrı listelerde tutar.
+    Pozitif/Negatif açı mantığıyla çalışan, hatasız birleştirme yapan motor.
     """
+    # Başlangıç Noktaları (0,0)
+    # Üst çizgi (top) ve Alt çizgi (bot) listeleri
+    # Sac başlangıçta sağa doğru (0 derece) gidiyor kabul edilir.
     
-    # Listeler: Üst yüzey (Top) ve Alt yüzey (Bottom)
-    # Başlangıçta (0,0) noktasındayız, yönümüz sağa (0 derece)
-    # Sac yatay duruyor: Üst yüzey y=0, Alt yüzey y=-thickness
-    
-    top_points = [[0, 0]]
-    bottom_points = [[0, -thickness]]
+    # Koordinat listeleri
+    top_x, top_y = [0], [0] # Üst yüzey (Referans hattı kabul edelim)
+    bot_x, bot_y = [0], [-thickness] # Alt yüzey (Kalınlık kadar aşağıda)
     
     current_x = 0
     current_y = 0
-    current_angle = 0 # Radyan
+    current_angle = 0 # Radyan cinsinden kümülatif açı
     
-    # Her adım için işlem yap
+    # Her adım için döngü
     for index, row in df_steps.iterrows():
         length = row['Uzunluk (mm)']
-        bend_angle_deg = row['Büküm Açısı (°)'] # Sonraki bükümün açısı
-        direction = row['Yön'] # Sonraki bükümün yönü
+        bend_deg = row['Açı (+/- °)'] # + Yukarı, - Aşağı
         
-        # 1. DÜZ KISIM (STRAIGHT)
+        # 1. DÜZ GİT (STRAIGHT LINE)
         # Mevcut açıda 'length' kadar ilerle
         dx = length * np.cos(current_angle)
         dy = length * np.sin(current_angle)
         
-        # Bitiş noktaları (Referans eksen: Üst yüzey gibi düşünelim, kalınlığı vektörle ekleyelim)
-        # Ancak kalınlığı korumak için normal vektörü kullanmalıyız.
+        # Yeni merkez noktası
+        new_x = current_x + dx
+        new_y = current_y + dy
         
-        # Mevcut yönün normal vektörü (Aşağı bakan)
+        # Üst ve Alt noktaları hesapla
+        # Üst nokta: Merkez + (0)  --- Basitlik için üst yüzeyi merkez hattı gibi referans alıyoruz
+        # Alt nokta: Merkez + (Normal Vektörü * Kalınlık)
+        
+        # Normal Vektörü (Sağa gidişin "Aşağısı")
+        # Vektör (cos a, sin a) -> Dik Vektör (sin a, -cos a)
         nx = np.sin(current_angle)
         ny = -np.cos(current_angle)
         
-        # Düz hattın sonu (Pivot noktası)
-        end_x = top_points[-1][0] + dx
-        end_y = top_points[-1][1] + dy
+        # Düz çizginin bitiş noktaları
+        t_end_x = new_x
+        t_end_y = new_y
+        b_end_x = new_x + nx * thickness
+        b_end_y = new_y + ny * thickness
         
-        top_points.append([end_x, end_y])
-        bottom_points.append([end_x + nx * thickness, end_y + ny * thickness])
+        top_x.append(t_end_x)
+        top_y.append(t_end_y)
+        bot_x.append(b_end_x)
+        bot_y.append(b_end_y)
         
-        # Eğer bu son adımsa veya açı 0/180 ise büküm yapma
-        if index == len(df_steps) - 1 or bend_angle_deg == 0 or bend_angle_deg == 180:
+        # Güncel konumu güncelle (Düz çizginin sonu)
+        current_x = new_x
+        current_y = new_y
+        
+        # Eğer açı 0 ise büküm yapma, döngüye devam et
+        if bend_deg == 0:
             continue
             
-        # 2. BÜKÜM KISMI (ARC)
-        # Büküm açısını (Makine açısı: 180 düz, 90 dik) sapma açısına çevir
-        deviation_angle = 180 - bend_angle_deg
-        dev_rad = np.radians(deviation_angle)
+        # 2. BÜKÜM YAP (ARC)
+        # Açıya göre yön belirle
+        is_up = bend_deg > 0
+        bend_rad_abs = np.radians(abs(bend_deg)) # Dönüş miktarı (pozitif)
         
-        # Yay oluşturma çözünürlüğü
-        steps = 15
+        # Büküm Merkezi Hesabı (Pivot)
+        # Eğer Yukarı dönüyorsak merkez SOLDA, Aşağı dönüyorsak SAĞDA kalır.
         
-        if direction == "Yukarı":
-            # Sola/Yukarı dönüş (+ açı)
-            # Dönüş merkezi: Mevcut noktanın "Solunda" (Gidiş yönüne göre)
-            # Üst yüzey İÇ (radius = r), Alt yüzey DIŞ (radius = r + t) olur.
+        if is_up:
+            # Merkez, gidiş yönünün SOLUNDA (current_angle + 90)
+            cx = current_x + inner_radius * np.cos(current_angle + np.pi/2)
+            cy = current_y + inner_radius * np.sin(current_angle + np.pi/2)
             
-            # Merkez bulma: Mevcut noktadan, akış yönüne dik (Sola) r kadar git
-            # Akış açısı: current_angle. Sola dik: current_angle + 90
-            cx = end_x + blade_radius * np.cos(current_angle + np.pi/2)
-            cy = end_y + blade_radius * np.sin(current_angle + np.pi/2)
-            
-            # Yay açıları
             start_ang = current_angle - np.pi/2
-            end_ang = start_ang + dev_rad
+            end_ang = start_ang + bend_rad_abs
             
-            angles = np.linspace(start_ang, end_ang, steps)
+            # İç Radius (Üst Yüzey) - Radius = r
+            # Dış Radius (Alt Yüzey) - Radius = r + t
+            r_top = inner_radius
+            r_bot = inner_radius + thickness
             
-            # Üst Yüzey (İç Radius)
-            arc_top_x = cx + blade_radius * np.cos(angles)
-            arc_top_y = cy + blade_radius * np.sin(angles)
-            
-            # Alt Yüzey (Dış Radius)
-            r_outer = blade_radius + thickness
-            arc_bot_x = cx + r_outer * np.cos(angles)
-            arc_bot_y = cy + r_outer * np.sin(angles)
-            
-            current_angle += dev_rad # Açıyı güncelle
+            # Açıyı güncelle (Pozitif yön)
+            current_angle += bend_rad_abs
             
         else: # Aşağı
-            # Sağa/Aşağı dönüş (- açı)
-            # Dönüş merkezi: Mevcut noktanın "Sağında"
-            # Üst yüzey DIŞ (radius = r + t), Alt yüzey İÇ (radius = r) olur.
+            # Merkez, gidiş yönünün SAĞINDA (current_angle - 90)
+            cx = current_x + inner_radius * np.cos(current_angle - np.pi/2)
+            cy = current_y + inner_radius * np.sin(current_angle - np.pi/2)
             
-            # Merkez bulma: Mevcut noktadan, akış yönüne dik (Sağa) r kadar git
-            # Sağa dik: current_angle - 90
-            cx = end_x + blade_radius * np.cos(current_angle - np.pi/2)
-            cy = end_y + blade_radius * np.sin(current_angle - np.pi/2)
-            
-            # Yay açıları
             start_ang = current_angle + np.pi/2
-            end_ang = start_ang - dev_rad
+            end_ang = start_ang - bend_rad_abs
             
-            angles = np.linspace(start_ang, end_ang, steps)
+            # Dış Radius (Üst Yüzey) - Radius = r + t (Çünkü aşağı bükünce üst yüzey uzar)
+            # İç Radius (Alt Yüzey) - Radius = r
+            r_top = inner_radius + thickness
+            r_bot = inner_radius
             
-            # Üst Yüzey (Dış Radius) - Çünkü aşağı bükünce üst yüzey gerilir
-            r_outer = blade_radius + thickness
-            arc_top_x = cx + r_outer * np.cos(angles)
-            arc_top_y = cy + r_outer * np.sin(angles)
-            
-            # Alt Yüzey (İç Radius/Bıçak)
-            arc_bot_x = cx + blade_radius * np.cos(angles)
-            arc_bot_y = cy + blade_radius * np.sin(angles)
-            
-            current_angle -= dev_rad # Açıyı güncelle
-            
-        # Yay noktalarını listelere ekle
-        for i in range(len(angles)):
-            top_points.append([arc_top_x[i], arc_top_y[i]])
-            bottom_points.append([arc_bot_x[i], arc_bot_y[i]])
-            
-    # POLİGON OLUŞTURMA
-    # Üst noktalar + Ters çevrilmiş Alt noktalar = Kapalı Şekil
+            # Açıyı güncelle (Negatif yön)
+            current_angle -= bend_rad_abs
+
+        # Yay Noktalarını Oluştur
+        angles = np.linspace(start_ang, end_ang, 20)
+        
+        arc_tx = cx + r_top * np.cos(angles)
+        arc_ty = cy + r_top * np.sin(angles)
+        
+        arc_bx = cx + r_bot * np.cos(angles)
+        arc_by = cy + r_bot * np.sin(angles)
+        
+        # Listelere ekle
+        top_x.extend(arc_tx)
+        top_y.extend(arc_ty)
+        bot_x.extend(arc_bx)
+        bot_y.extend(arc_by)
+        
+        # Konumu yayın bittiği yere güncelle (Üst yüzeyin sonu referansımızsa dikkat!)
+        # Burada referans kaymasını önlemek için bir sonraki düzlüğün başlangıç noktasını
+        # yayın bittiği "merkez hat" (veya üst hat) olarak ayarlamalıyız.
+        
+        # Yukarı bükümde: Üst yüzey iç radiustur. current_x yayın sonundaki iç nokta olmalı.
+        if is_up:
+            current_x = arc_tx[-1]
+            current_y = arc_ty[-1]
+        else:
+            # Aşağı bükümde: Üst yüzey dış radiustur. Ama bizim "Centerline" mantığımızda
+            # bir sonraki düzlük nereden başlar? 
+            # Düzlük her zaman "İç Radiusun bittiği yerin hizasından" değil, parçanın gövdesinden devam eder.
+            # Kodun tutarlılığı için:
+            # Aşağı bükümde current_x, üst yüzeyin (dış radiusun) bittiği yer olsun.
+            current_x = arc_tx[-1]
+            current_y = arc_ty[-1]
+
+    # POLİGON KAPATMA
+    # Üst noktalar + Ters çevrilmiş Alt noktalar
+    final_x = top_x + bot_x[::-1] + [top_x[0]]
+    final_y = top_y + bot_y[::-1] + [top_y[0]]
     
-    # Alt noktaları ters çevir (sondan başa)
-    bottom_points_reversed = bottom_points[::-1]
-    
-    final_x = [p[0] for p in top_points] + [p[0] for p in bottom_points_reversed] + [top_points[0][0]]
-    final_y = [p[1] for p in top_points] + [p[1] for p in bottom_points_reversed] + [top_points[0][1]]
-    
-    return final_x, final_y, top_points[-1][0] # Son X koordinatını da dönelim (scale için)
+    return final_x, final_y
 
 # --- ARAYÜZ ---
-st.title("🛠️ Çoklu Büküm ve Kalıp Simülasyonu")
+st.title("⚡ Hızlı Profil Oluşturucu")
 
-col_settings, col_visual = st.columns([1, 2])
+col_left, col_right = st.columns([1, 2])
 
-with col_settings:
-    st.subheader("1. Malzeme Ayarları")
+with col_left:
+    st.subheader("1. Ölçüler")
+    
+    # Malzeme Bilgisi
     c1, c2 = st.columns(2)
-    thickness = c1.number_input("Sac Kalınlığı (mm)", 0.1, 50.0, 2.0)
-    blade_r = c2.number_input("Bıçak Keskinliği (R)", 0.1, 50.0, 0.8, step=0.1, help="İç Radius")
+    th = c1.number_input("Kalınlık", 0.5, 20.0, 2.0)
+    rad = c2.number_input("Radius", 0.5, 20.0, 1.0)
     
-    st.divider()
+    st.markdown("---")
     
-    st.subheader("2. Büküm Adımları")
-    st.info("Tabloya satır ekleyerek bükümleri artırın. İlk satır başlangıç düzlüğüdür.")
+    st.subheader("2. Büküm Tablosu")
+    st.info("➕ : Yukarı Büküm | ➖ : Aşağı Büküm")
     
-    # Varsayılan Veri: Z Şekli (Hatıl)
+    # BASİTLEŞTİRİLMİŞ TABLO
+    # Varsayılan: Z Profil (100 düz -> 90 Yukarı -> 50 düz -> -90 Aşağı -> 100 düz)
     default_data = [
-        {"Uzunluk (mm)": 100, "Büküm Açısı (°)": 90, "Yön": "Yukarı"}, # 1. Parça + Dönüş
-        {"Uzunluk (mm)": 50,  "Büküm Açısı (°)": 90, "Yön": "Aşağı"},  # 2. Parça + Dönüş
-        {"Uzunluk (mm)": 100, "Büküm Açısı (°)": 0,  "Yön": "-"},       # 3. Parça (Bitiş)
+        {"Uzunluk (mm)": 100, "Açı (+/- °)": 90},  # İlk parça ve sonundaki büküm
+        {"Uzunluk (mm)": 50,  "Açı (+/- °)": -90}, # İkinci parça ve sonundaki büküm
+        {"Uzunluk (mm)": 100, "Açı (+/- °)": 0},   # Son parça (Büküm yok)
     ]
     
-    df = pd.DataFrame(default_data)
+    df_input = pd.DataFrame(default_data)
     
-    # Data Editor Konfigürasyonu
     edited_df = st.data_editor(
-        df,
+        df_input,
         num_rows="dynamic",
         column_config={
-            "Uzunluk (mm)": st.column_config.NumberColumn(min_value=1, max_value=5000, required=True),
-            "Büküm Açısı (°)": st.column_config.NumberColumn(min_value=0, max_value=180, help="0: Düz, 90: Dik, Son parça için 0 girin"),
-            "Yön": st.column_config.SelectboxColumn(options=["Yukarı", "Aşağı", "-"], required=True, help="Son parçada yön önemsizdir")
+            "Uzunluk (mm)": st.column_config.NumberColumn(min_value=1, required=True),
+            "Açı (+/- °)": st.column_config.NumberColumn(
+                help="Pozitif (+) Yukarı, Negatif (-) Aşağı, 0 Düz",
+                min_value=-180, 
+                max_value=180
+            )
         },
         hide_index=True
     )
 
-with col_visual:
-    st.subheader("3. Simülasyon Önizleme")
-    
-    # Grafiği Hesapla
+with col_right:
+    # --- GRAFİK ÇİZİMİ ---
     if not edited_df.empty:
-        x_poly, y_poly, max_len = generate_multi_bend_profile(edited_df, thickness, blade_r)
+        fx, fy = generate_smart_profile(edited_df, th, rad)
         
         fig = go.Figure()
         
-        # Sac Çizimi
         fig.add_trace(go.Scatter(
-            x=x_poly, y=y_poly,
+            x=fx, y=fy,
             fill='toself', fillcolor='#4a86e8',
             line=dict(color='black', width=2),
-            name='Sac Profili',
-            hoverinfo='skip'
+            mode='lines',
+            name='Profil'
         ))
         
-        # Eksen Ayarları (Auto-Fit)
-        min_x, max_x = min(x_poly), max(x_poly)
-        min_y, max_y = min(y_poly), max(y_poly)
-        
-        # Kenar boşluğu
-        margin_x = max((max_x - min_x) * 0.1, 10)
-        margin_y = max((max_y - min_y) * 0.1, 10)
+        # Eksen Ayarları
+        min_x, max_x = min(fx), max(fx)
+        min_y, max_y = min(fy), max(fy)
+        pad = max((max_x-min_x)*0.1, (max_y-min_y)*0.1, 10)
         
         fig.update_layout(
-            dragmode='pan', # Pan özelliği açık kalsın
-            showlegend=False,
             height=600,
-            xaxis=dict(
-                title="Uzunluk (mm)", 
-                range=[min_x - margin_x, max_x + margin_x], 
-                zeroline=True, showgrid=True, gridcolor='#eee'
-            ),
-            yaxis=dict(
-                title="Yükseklik (mm)", 
-                range=[min_y - margin_y, max_y + margin_y], 
-                scaleanchor="x", scaleratio=1, # Eşit ölçek (aspect ratio)
-                zeroline=True, showgrid=True, gridcolor='#eee'
-            ),
-            paper_bgcolor="white",
-            plot_bgcolor="white",
-            margin=dict(l=20, r=20, t=20, b=20)
+            dragmode='pan',
+            showlegend=False,
+            xaxis=dict(showgrid=True, gridcolor='#eee', zeroline=True, scaleanchor="y", scaleratio=1),
+            yaxis=dict(showgrid=True, gridcolor='#eee', zeroline=True),
+            margin=dict(l=20, r=20, t=30, b=20),
+            title="Profil Önizleme"
         )
-        
-        # Ölçü Bilgileri (Annotation) - Her parçanın ortasına yazı ekle
-        # Bu kısım karmaşık olabileceği için şimdilik sadece görseli veriyoruz.
         
         st.plotly_chart(fig, use_container_width=True)
         
-        # Toplam açınım (Basit toplama)
-        total_len = edited_df['Uzunluk (mm)'].sum()
-        st.success(f"📏 Toplam Profil Uzunluğu (Düz Hatlar): **{total_len} mm** (+ Büküm kayıpları/kazançları hariç)")
+        # Alt Bilgi
+        total_len = edited_df["Uzunluk (mm)"].sum()
+        st.success(f"📏 Toplam Kesim Uzunluğu: **{total_len} mm**")
