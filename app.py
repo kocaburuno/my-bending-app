@@ -2,108 +2,227 @@ import streamlit as st
 import plotly.graph_objects as go
 import numpy as np
 
-# Sayfa Ayarları
-st.set_page_config(page_title="3D Büküm Simülasyonu", layout="wide", page_icon="📐")
+# --- SAYFA AYARLARI ---
+st.set_page_config(page_title="Büküm Simülasyonu v2", layout="wide", page_icon="📐")
 
-# --- CSS İLE TEMA ENTEGRASYONU (Diğer uygulamanıza benzetmek için) ---
+# --- CSS VE TEMA ---
 st.markdown("""
     <style>
     .stButton>button {
         background-color: #0068C9;
         color: white;
         border-radius: 5px;
+        width: 100%;
+    }
+    .metric-card {
+        background-color: #F0F2F6;
+        padding: 15px;
+        border-radius: 10px;
+        border-left: 5px solid #0068C9;
     }
     </style>
     """, unsafe_allow_html=True)
 
-# --- BAŞLIK VE AÇIKLAMA ---
-st.title("📐 Akıllı Büküm ve Kalıp Simülasyonu")
-st.markdown("Malzeme özelliklerini girin, gerekli kalıbı ve büküm sonucunu 3D olarak görüntüleyin.")
-
-# --- SOL MENÜ (INPUTLAR) ---
-with st.sidebar:
-    st.header("Malzeme Özellikleri")
+# --- YARDIMCI MATEMATİK FONKSİYONLARI ---
+def calculate_coordinates(length, angle_deg, thickness, width=50):
+    """
+    Bükülen parçanın koordinatlarını hesaplar.
+    """
+    angle_rad = np.radians(180 - angle_deg)
     
-    material_type = st.selectbox("Malzeme Tipi", ["Siyah Sac (ST37)", "Paslanmaz (304)", "Alüminyum"])
-    thickness = st.number_input("Kalınlık (mm)", min_value=0.5, max_value=20.0, value=2.0, step=0.5)
-    bend_angle = st.slider("Büküm Açısı (°)", min_value=0, max_value=180, value=90, step=1)
-    flange_length = st.number_input("Kenar Uzunluğu (mm)", min_value=10, value=100)
+    # Sol Kanat (Sabit kabul edelim)
+    # Başlangıç noktası (0,0,0) büküm merkezi olsun
+    
+    # Sağ Kanat (Bükülen)
+    x_end = length * np.cos(angle_rad)
+    z_end = length * np.sin(angle_rad)
+    
+    return x_end, z_end
+
+def create_extruded_shape(x_profile, z_profile, width, color, name, opacity=1.0):
+    """
+    2D bir profili (X, Z) Y ekseni boyunca uzatarak 3D nesne yapar.
+    """
+    x_3d = []
+    y_3d = []
+    z_3d = []
+    
+    # Ön yüz ve Arka yüz
+    for y in [0, width]:
+        x_3d.extend(x_profile)
+        y_3d.extend([y] * len(x_profile))
+        z_3d.extend(z_profile)
+        
+    # Plotly Mesh3D için vertex mantığı (basitleştirilmiş yüzey)
+    # Burada daha temiz görünüm için 'Scatter3d' ile çizgiler ve 'Mesh3d' ile yüzeyler birleştirilebilir.
+    # Ancak karikatürize görünüm için Mesh3d yeterli.
+    
+    return go.Mesh3d(
+        x=x_3d, y=y_3d, z=z_3d,
+        color=color,
+        opacity=opacity,
+        name=name,
+        alphahull=0, # Dış kabuk oluşturur
+        lighting=dict(diffuse=0.5, ambient=0.5, specular=0.1),
+        flatshading=True
+    )
+
+# --- ANA UYGULAMA ---
+
+st.title("📐 Hassas Büküm Planlayıcı")
+st.markdown("İç/Dış ölçü tercihlerine göre bıçak ve kalıp simülasyonu.")
+
+col_input, col_sim = st.columns([1, 2])
+
+with col_input:
+    st.subheader("⚙️ Parametreler")
+    
+    # Malzeme
+    material = st.selectbox("Malzeme", ["Siyah Sac (ST37)", "Paslanmaz (304)", "Alüminyum"])
+    thickness = st.number_input("Kalınlık (mm)", 0.5, 20.0, 2.0, 0.5)
     
     st.markdown("---")
-    st.caption("AI Destekli Kalıp Seçici: Aktif 🟢")
+    
+    # Ölçü Tipi
+    measure_type = st.radio("Ölçü Tipi", ["Dış Ölçü (Outside)", "İç Ölçü (Inside)"], horizontal=True)
+    
+    # Kenar Uzunlukları
+    l1 = st.number_input("Sol Kenar (L1) mm", min_value=10.0, value=50.0)
+    l2 = st.number_input("Sağ Kenar (L2) mm", min_value=10.0, value=50.0)
+    
+    # Açı
+    angle = st.slider("Büküm Açısı (°)", 30, 180, 90)
+    
+    st.markdown("---")
+    st.info(f"📍 **Sabit Üst Bıçak:** R0.8")
+    
+    # V Kalıp Seçimi (Otomatik Öneri)
+    suggested_v = int(thickness * 8) # Basit 8x kuralı
+    # Standart V'lere yuvarla
+    std_v = [6, 8, 10, 12, 16, 20, 25, 32, 40, 50, 60, 80]
+    best_v = min(std_v, key=lambda x: abs(x - suggested_v))
+    
+    v_die_width = st.selectbox("Alt Kalıp (V) Seçimi", std_v, index=std_v.index(best_v) if best_v in std_v else 0)
 
-# --- HESAPLAMA MOTORU (BASİT MANTIK) ---
-def suggest_tools(thickness, material):
-    # Bu kısım ileride AI veya geniş bir veritabanı ile geliştirilecek
-    # Basit bir kural: V kanalı genellikle kalınlığın 6-8 katı seçilir.
-    
-    v_opening = thickness * 8 # Standart kural
-    
-    # En yakın standart V ölçüsüne yuvarla
-    standard_vs = [6, 8, 10, 12, 16, 20, 25, 32, 40, 50]
-    recommended_v = min(standard_vs, key=lambda x: abs(x - v_opening))
-    
-    punch_radius = thickness * 1.0 # Basit kural
-    
-    return recommended_v, punch_radius
 
-# --- 3D GÖRSELLEŞTİRME FONKSİYONU ---
-def plot_bent_sheet(angle, length, width=100):
-    # Açıyı radyana çevir
+with col_sim:
+    # --- HESAPLAMALAR VE GÖRSELLEŞTİRME ---
+    
+    # İç/Dış Ölçü Düzeltmesi
+    # Görselleştirmede parçanın "orta eksenini" veya "iç yüzeyini" referans alırız.
+    # Basitlik için iç yüzeyi referans alıp kalınlığı ekleyelim.
+    
+    if "Dış" in measure_type:
+        # Dış ölçü verildiyse, büküm çizgisine kadar olan mesafe kabaca kalınlık kadar azalır (görsel için)
+        vis_l1 = l1 - thickness
+        vis_l2 = l2 - thickness
+    else:
+        # İç ölçü verildiyse olduğu gibi kullanılır
+        vis_l1 = l1
+        vis_l2 = l2
+
+    width_plate = 40 # Görsel derinlik (sabit)
+
+    # 1. SAC PARÇASI (SHEET) OLUŞTURMA
+    # Sol kanat (düzlemde sabit)
+    sheet_x = [-vis_l1, 0, 0, -vis_l1]
+    sheet_y = [0, 0, width_plate, width_plate]
+    sheet_z = [0, 0, 0, 0] # Taban düzlemi
+    
+    # Sağ kanat (Açıya göre kalkar)
     rad = np.radians(180 - angle)
+    x_tip = vis_l1 * np.cos(rad) # Sadece görsel referans, aslında 0'dan başlar
+    z_tip = vis_l1 * np.sin(rad)
     
-    # Sabit duran parça (Taban)
-    x1 = [0, length, length, 0]
-    y1 = [0, 0, width, width]
-    z1 = [0, 0, 0, 0]
-    
-    # Bükülen parça (Kalkış yapan)
-    # Trigonometri ile yeni koordinatlar
-    x2 = [length, length + length * np.cos(rad), length + length * np.cos(rad), length]
-    y2 = [0, 0, width, width]
-    z2 = [0, length * np.sin(rad), length * np.sin(rad), 0]
+    # Sağ kanat koordinatları (Orijinden başlayıp yukarı/sağa gider)
+    # Not: Görselde V'nin tam ortasına oturması için biraz kaydırma yapılabilir ama şimdilik merkez 0,0
+    r_wing_x = [0, vis_l2 * np.cos(rad), vis_l2 * np.cos(rad), 0]
+    r_wing_y = [0, 0, width_plate, width_plate]
+    r_wing_z = [0, vis_l2 * np.sin(rad), vis_l2 * np.sin(rad), 0]
+
+    # Kalınlık eklemek için Mesh3D yerine yüzeyleri "üst üste" çizebiliriz veya basitçe tekil yüzey gösteririz.
+    # Karikatürize olması için tek yüzey + kalın çizgi yeterli.
     
     fig = go.Figure()
+
+    # SOL KANAT
+    fig.add_trace(go.Mesh3d(
+        x=sheet_x, y=sheet_y, z=sheet_z,
+        color='#a6cee3', name='Sac (Sol)', opacity=0.9
+    ))
+    # SAĞ KANAT
+    fig.add_trace(go.Mesh3d(
+        x=r_wing_x, y=r_wing_y, z=r_wing_z,
+        color='#1f78b4', name='Sac (Sağ)', opacity=0.9
+    ))
     
-    # Taban Parçası
-    fig.add_trace(go.Mesh3d(x=x1, y=y1, z=z1, color='gray', opacity=1, name='Sabit Kısım'))
+    # 2. ÜST BIÇAK (PUNCH) - SABİT R0.8
+    # Üst bıçak kama şeklindedir, büküm noktasına (0,0) iniyor gibi çizelim.
+    punch_h = 40
+    punch_w = 10
     
-    # Bükülen Parça
-    fig.add_trace(go.Mesh3d(x=x2, y=y2, z=z2, color='#0068C9', opacity=1, name='Bükülen Kısım'))
+    # Bıçağın ucu sacın iç yüzeyine (0,0,0) değer.
+    # Kama şekli:
+    px = [-5, 5, 5, -5, 0, 0] # Basit prizma + uç
+    pz = [punch_h, punch_h, punch_h, punch_h, 0.8, 0.8] # R0.8 temsili uç
+    # Bu kısmı basitleştirilmiş bir "Ok" veya "Kama" olarak çizelim.
     
-    # Eksen ayarları
+    fig.add_trace(go.Scatter3d(
+        x=[0, 0], y=[width_plate/2, width_plate/2], z=[10, 50],
+        mode='lines', line=dict(color='grey', width=10), name='Bıçak Gövdesi'
+    ))
+    # Bıçak Ucu (V şeklinde)
+    fig.add_trace(go.Mesh3d(
+        x=[-5, 5, 0, -5, 5, 0],
+        y=[0, 0, 0, width_plate, width_plate, width_plate],
+        z=[20, 20, 0.8, 20, 20, 0.8], # 0.8mm offset (Radius payı)
+        color='grey', name='R0.8 Bıçak'
+    ))
+
+    # 3. ALT KALIP (V-DIE)
+    # V genişliği kullanıcıdan geliyor: v_die_width
+    # V kalıbı sacın altında (-thickness) konumunda olmalı
+    die_h = 30
+    die_half_w = v_die_width / 2 + 10 # Kalıp genişliği biraz taşsın
+    
+    # V Yarığı koordinatları
+    # Sol üst, V dip, Sağ üst
+    vx = [-die_half_w, -v_die_width/2, 0, v_die_width/2, die_half_w]
+    vz = [-thickness, -thickness, -thickness - (v_die_width/2 * np.tan(np.radians(45))), -thickness, -thickness] 
+    # V açısını 88-90 derece varsayıyoruz (derinlik V/2 civarı)
+    
+    # Basit bir blok çizimi yerine sadece V formunu çizgi olarak gösterelim (Daha temiz görünür)
+    for y_pos in [0, width_plate]:
+        fig.add_trace(go.Scatter3d(
+            x=vx, y=[y_pos]*5, z=vz,
+            mode='lines', line=dict(color='black', width=5), name='Alt Kalıp'
+        ))
+        
+    # Alt kalıp gövdesi (Blok)
+    fig.add_trace(go.Mesh3d(
+        x=[-die_half_w, die_half_w, die_half_w, -die_half_w],
+        y=[0, 0, width_plate, width_plate],
+        z=[-thickness-30, -thickness-30, -thickness, -thickness],
+        color='#bdbdbd', name='Kalıp Gövdesi', opacity=0.5
+    ))
+
+    # Eksen Ayarları
     fig.update_layout(
         scene=dict(
-            xaxis=dict(range=[-50, length*2.5], title='X (mm)'),
-            yaxis=dict(range=[-50, width+50], title='Y (mm)'),
-            zaxis=dict(range=[-50, length*2], title='Z (mm)'),
-            aspectmode='data'
+            xaxis=dict(title='Genişlik (mm)', range=[-l1-10, l2+10]),
+            yaxis=dict(title='Derinlik', showticklabels=False),
+            zaxis=dict(title='Yükseklik (mm)', range=[-40, 60]),
+            aspectratio=dict(x=2, y=0.5, z=1)
         ),
-        margin=dict(r=0, l=0, b=0, t=0)
+        margin=dict(r=0, l=0, b=0, t=0),
+        title=f"V{v_die_width} Kalıpta Simülasyon"
     )
-    return fig
 
-# --- ANA EKRAN ÇIKTILARI ---
-col1, col2 = st.columns([2, 1])
-
-with col1:
-    st.subheader("3D Önizleme")
-    fig = plot_bent_sheet(bend_angle, flange_length)
     st.plotly_chart(fig, use_container_width=True)
-
-with col2:
-    st.subheader("Otomatik Hesaplamalar")
     
-    rec_v, rec_r = suggest_tools(thickness, material_type)
-    
-    st.info(f"💡 **Önerilen V Kanalı:** V{rec_v}")
-    st.success(f"🔨 **Önerilen Üst Bıçak:** R{rec_r}")
-    
-    # K-Faktörü veya Açınım hesabı (Basit örnek)
-    k_factor = 0.35 # Ortalama değer
-    deduction = 2 * (np.tan(np.radians(180-bend_angle)/2)) * (thickness + rec_r) - (np.pi * bend_angle/180 * (rec_r + k_factor * thickness))
-    flat_length = (flange_length * 2) - deduction
-    
-    st.metric("Tahmini Açınım Boyu", f"{flat_length:.2f} mm")
-    
-    st.warning("Not: Bu değerler teoriktir. Makine parkuruna göre kalibre edilmelidir.")
+    # SONUÇ VERİLERİ
+    st.markdown("### 📊 Sonuç Özeti")
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Kullanılan V", f"V{v_die_width}")
+    c2.metric("Üst Bıçak", "R0.8 (Sabit)")
+    c3.metric("Tahmini İç R", f"~{thickness * 0.2 + 0.8:.1f} mm") # Pratik kural
