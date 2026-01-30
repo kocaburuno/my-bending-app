@@ -183,7 +183,7 @@ def add_dims(fig, apex_x, apex_y, directions, lengths, angles):
             line=dict(color='black', width=1), hoverinfo='skip'
         ))
         fig.add_annotation(
-            x=mid_p[0], y=mid_p[1], text=f"<b>{int(lengths[i])}</b>",
+            x=mid_p[0], y=mid_p[1], text=f"<b>{lengths[i]:.1f}</b>", # Ondalıklı Gösterim
             showarrow=False, yshift=10*side, font=dict(color="#B22222", size=14),
             bgcolor="rgba(255,255,255,0.8)"
         )
@@ -220,11 +220,13 @@ st.title("📐 Kolay Büküm Simülasyonu")
 col_input, col_view = st.columns([1, 2.5])
 
 with col_input:
-    # --- 1. SAC VE KALIP AYARLARI (EN ÜSTTE) ---
+    # --- 1. SAC VE KALIP AYARLARI (GÜNCELLENDİ) ---
     st.markdown("#### ⚙️ Sac ve Kalıp Ayarları")
     c_th, c_rad = st.columns(2)
-    th = c_th.number_input("Kalınlık (mm)", 0.5, 20.0, 2.0)
-    rad = c_rad.number_input("İç Radius (mm)", 0.5, 20.0, 1.0)
+    # Kalınlık: 0.1mm adımlarla
+    th = c_th.number_input("Kalınlık (mm)", min_value=0.1, max_value=50.0, value=2.0, step=0.1)
+    # Bıçak Radius: Min 0.80, Adım 0.1
+    rad = c_rad.number_input("Bıçak Radius (mm)", min_value=0.8, max_value=50.0, value=0.8, step=0.1)
 
     st.divider()
 
@@ -250,14 +252,15 @@ with col_input:
 
     st.divider()
 
-    # --- 3. ÖLÇÜ GİRİŞİ ---
+    # --- 3. ÖLÇÜ GİRİŞİ (0.1 ADIMLI) ---
     st.markdown("#### ✏️ Ölçü Girişi")
     
     # 1. BAŞLANGIÇ
     st.markdown('<div class="section-header">1. Başlangıç Kenarı</div>', unsafe_allow_html=True)
     st.session_state.lengths[0] = st.number_input(
         "L_start", value=float(st.session_state.lengths[0]), 
-        min_value=1.0, key="len_0", label_visibility="collapsed"
+        min_value=1.0, step=0.1, # Hassasiyet eklendi
+        key="len_0", label_visibility="collapsed"
     )
     
     # 2. BÜKÜM DÖNGÜSÜ
@@ -268,7 +271,8 @@ with col_input:
         st.caption("Kenar Uzunluğu (mm)")
         st.session_state.lengths[i+1] = st.number_input(
             f"Len_{i+1}", value=float(st.session_state.lengths[i+1]), 
-            min_value=1.0, key=f"len_{i+1}", label_visibility="collapsed"
+            min_value=1.0, step=0.1, # Hassasiyet eklendi
+            key=f"len_{i+1}", label_visibility="collapsed"
         )
         
         # 2. Açı ve Yön
@@ -277,7 +281,10 @@ with col_input:
             st.caption("Açı (°)")
             st.session_state.angles[i] = st.number_input(
                 f"Ang_{i}", value=float(st.session_state.angles[i]), 
-                min_value=1.0, max_value=180.0, key=f"ang_{i}", label_visibility="collapsed"
+                min_value=1.0, max_value=180.0, 
+                key=f"ang_{i}", label_visibility="collapsed"
+                # Açı genelde tam sayı tercih edilir ama isterseniz buraya da step=0.1 ekleyebiliriz.
+                # Standart makinelerde genelde derece tam sayı veya 0.5 kullanılır.
             )
         with c_dir:
             st.caption("Yön")
@@ -337,4 +344,4 @@ with col_view:
     st.plotly_chart(fig, use_container_width=True)
     
     total_len = sum(st.session_state.lengths)
-    st.success(f"✅ Toplam Dış Ölçü: **{total_len:.0f} mm**")
+    st.success(f"✅ Toplam Dış Ölçü: **{total_len:.1f} mm**")
