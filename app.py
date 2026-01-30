@@ -154,9 +154,11 @@ def generate_solid_and_dimensions(lengths, angles, dirs, thickness, inner_radius
     
     return final_x, final_y, apex_x, apex_y, directions
 
-# --- ÖLÇÜLENDİRME ---
+# --- ÖLÇÜLENDİRME (GÜNCELLENDİ) ---
 def add_dims(fig, apex_x, apex_y, directions, lengths, angles):
-    dim_offset = 35
+    # 1. İsteğe Bağlı Düzeltme: Ofset mesafesi artırıldı (Daha fazla boşluk)
+    dim_offset = 50 
+    
     for i in range(len(lengths)):
         p1 = np.array([apex_x[i], apex_y[i]])
         p2 = np.array([apex_x[i+1], apex_y[i+1]])
@@ -176,23 +178,29 @@ def add_dims(fig, apex_x, apex_y, directions, lengths, angles):
         dim_p2 = p2 + normal * dim_offset * side
         mid_p = (dim_p1 + dim_p2) / 2
         
+        # Ok Çizgisi (Hover kapalı)
         fig.add_trace(go.Scatter(
             x=[dim_p1[0], dim_p2[0]], y=[dim_p1[1], dim_p2[1]],
             mode='lines+markers',
             marker=dict(symbol='arrow', size=8, angleref="previous", color='black'),
-            line=dict(color='black', width=1), hoverinfo='skip'
+            line=dict(color='black', width=1), 
+            hoverinfo='skip' # 1. İsteğe Bağlı Düzeltme: Hover kapalı
         ))
+        # Yazı
         fig.add_annotation(
-            x=mid_p[0], y=mid_p[1], text=f"<b>{lengths[i]:.1f}</b>", # Ondalıklı Gösterim
+            x=mid_p[0], y=mid_p[1], text=f"<b>{lengths[i]:.1f}</b>",
             showarrow=False, yshift=10*side, font=dict(color="#B22222", size=14),
             bgcolor="rgba(255,255,255,0.8)"
         )
+        # Uzatma Çizgileri (Hover kapalı)
         fig.add_trace(go.Scatter(
             x=[p1[0], dim_p1[0], None, p2[0], dim_p2[0]], 
             y=[p1[1], dim_p1[1], None, p2[1], dim_p2[1]],
-            mode='lines', line=dict(color='gray', width=0.5, dash='dot'), hoverinfo='skip'
+            mode='lines', line=dict(color='gray', width=0.5, dash='dot'), 
+            hoverinfo='skip' # 1. İsteğe Bağlı Düzeltme: Hover kapalı
         ))
 
+    # Açı Ölçüleri
     curr_abs_ang = 0
     for i in range(len(angles)):
         val = angles[i]
@@ -204,8 +212,11 @@ def add_dims(fig, apex_x, apex_y, directions, lengths, angles):
         dev_deg = 180 - val
         
         bisector = curr_abs_ang + np.radians(dev_deg * d_val / 2) - (np.pi/2 * d_val)
-        txt_x = corner[0] + 40 * np.cos(bisector)
-        txt_y = corner[1] + 40 * np.sin(bisector)
+        
+        # 1. İsteğe Bağlı Düzeltme: Açı yazı mesafesi artırıldı
+        dist = 50
+        txt_x = corner[0] + dist * np.cos(bisector)
+        txt_y = corner[1] + dist * np.sin(bisector)
         
         fig.add_annotation(
             x=txt_x, y=txt_y, ax=corner[0], ay=corner[1],
@@ -220,12 +231,10 @@ st.title("📐 Kolay Büküm Simülasyonu")
 col_input, col_view = st.columns([1, 2.5])
 
 with col_input:
-    # --- 1. SAC VE KALIP AYARLARI (GÜNCELLENDİ) ---
+    # --- 1. SAC VE KALIP AYARLARI ---
     st.markdown("#### ⚙️ Sac ve Kalıp Ayarları")
     c_th, c_rad = st.columns(2)
-    # Kalınlık: 0.1mm adımlarla
     th = c_th.number_input("Kalınlık (mm)", min_value=0.1, max_value=50.0, value=2.0, step=0.1)
-    # Bıçak Radius: Min 0.80, Adım 0.1
     rad = c_rad.number_input("Bıçak Radius (mm)", min_value=0.8, max_value=50.0, value=0.8, step=0.1)
 
     st.divider()
@@ -252,14 +261,14 @@ with col_input:
 
     st.divider()
 
-    # --- 3. ÖLÇÜ GİRİŞİ (0.1 ADIMLI) ---
+    # --- 3. ÖLÇÜ GİRİŞİ ---
     st.markdown("#### ✏️ Ölçü Girişi")
     
     # 1. BAŞLANGIÇ
     st.markdown('<div class="section-header">1. Başlangıç Kenarı</div>', unsafe_allow_html=True)
     st.session_state.lengths[0] = st.number_input(
         "L_start", value=float(st.session_state.lengths[0]), 
-        min_value=1.0, step=0.1, # Hassasiyet eklendi
+        min_value=1.0, step=0.1,
         key="len_0", label_visibility="collapsed"
     )
     
@@ -271,7 +280,7 @@ with col_input:
         st.caption("Kenar Uzunluğu (mm)")
         st.session_state.lengths[i+1] = st.number_input(
             f"Len_{i+1}", value=float(st.session_state.lengths[i+1]), 
-            min_value=1.0, step=0.1, # Hassasiyet eklendi
+            min_value=1.0, step=0.1,
             key=f"len_{i+1}", label_visibility="collapsed"
         )
         
@@ -283,8 +292,6 @@ with col_input:
                 f"Ang_{i}", value=float(st.session_state.angles[i]), 
                 min_value=1.0, max_value=180.0, 
                 key=f"ang_{i}", label_visibility="collapsed"
-                # Açı genelde tam sayı tercih edilir ama isterseniz buraya da step=0.1 ekleyebiliriz.
-                # Standart makinelerde genelde derece tam sayı veya 0.5 kullanılır.
             )
         with c_dir:
             st.caption("Yön")
@@ -321,9 +328,11 @@ with col_view:
     
     fig = go.Figure()
     
+    # Ana Parça (Hover kapalı)
     fig.add_trace(go.Scatter(
         x=sx, y=sy, fill='toself', fillcolor='rgba(176, 196, 222, 0.5)',
-        line=dict(color='#4682B4', width=2), mode='lines'
+        line=dict(color='#4682B4', width=2), mode='lines',
+        hoverinfo='skip' # 1. İsteğe Bağlı Düzeltme: Hover kapalı
     ))
     
     add_dims(fig, ax, ay, drs, st.session_state.lengths, st.session_state.angles)
@@ -336,6 +345,7 @@ with col_view:
     
     fig.update_layout(
         height=700, dragmode='pan', showlegend=False,
+        hovermode=False, # 1. İsteğe Bağlı Düzeltme: Genel hover kapalı
         xaxis=dict(showgrid=True, gridcolor='#f9f9f9', zeroline=False, visible=False, scaleanchor="y"),
         yaxis=dict(showgrid=True, gridcolor='#f9f9f9', zeroline=False, visible=False),
         plot_bgcolor="white", title=dict(text="Teknik Resim Önizleme", x=0.5),
