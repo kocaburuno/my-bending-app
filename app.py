@@ -3,60 +3,58 @@ import plotly.graph_objects as go
 import numpy as np
 import pandas as pd
 
-# --- SAYFA AYARLARI (MOBİL UYUMLU) ---
+# --- SAYFA AYARLARI ---
 st.set_page_config(page_title="Büküm Simülasyonu", layout="wide", page_icon="📐", initial_sidebar_state="expanded")
 
-# --- CSS: ULTRA KOMPAKT VE MOBİL DOSTU ---
+# --- CSS: ULTRA KOMPAKT (BOŞLUKLARI YOK ET) ---
 st.markdown("""
     <style>
-    /* 1. Sayfa Kenar Boşluklarını Sıfırla */
+    /* 1. Ana Sayfa Kenar Boşluklarını Minimuma İndir */
     .block-container {
-        padding-top: 1rem !important;
+        padding-top: 0.5rem !important;
         padding-bottom: 1rem !important;
-        padding-left: 1rem !important;
-        padding-right: 1rem !important;
+        padding-left: 0.5rem !important;
+        padding-right: 0.5rem !important;
     }
     
-    /* 2. Sidebar (Sol Menü) Sıkılaştırma */
+    /* 2. Sidebar İç Boşluklarını Kıs */
     [data-testid="stSidebar"] .block-container {
         padding-top: 1rem;
-    }
-    [data-testid="stSidebarUserContent"] {
-        padding-top: 0rem;
+        padding-bottom: 1rem;
     }
     
-    /* 3. Widget'lar Arası Boşlukları Yok Et */
-    div[data-testid="column"] {
-        gap: 0.2rem !important; 
-    }
-    .stNumberInput, .stSelectbox {
-        margin-bottom: -15px !important; /* Alt boşluğu eksiye çekerek yapıştır */
+    /* 3. Bileşenler Arasındaki Dikey Boşluğu (Gap) Azalt */
+    div[data-testid="stVerticalBlock"] {
+        gap: 0.3rem !important;
     }
     
-    /* 4. Başlıkları Küçült ve Sıkıştır */
-    h4 {
-        margin-top: 0.5rem !important;
-        margin-bottom: 0.5rem !important;
-        font-size: 1rem !important;
-    }
-    .compact-header {
-        font-size: 0.85rem;
-        font-weight: bold;
-        color: #555;
-        margin-bottom: 0px;
+    /* 4. Input Kutularının Alt/Üst Boşluklarını Sil */
+    .stNumberInput, .stSelectbox, .stButton {
+        margin-bottom: 0px !important;
+        margin-top: 0px !important;
     }
     
-    /* 5. Butonlar */
+    /* 5. Özel Başlıklar (Compact Header) */
+    .compact-label {
+        font-size: 0.8rem;
+        font-weight: 600;
+        color: #444;
+        margin-bottom: 2px;
+        margin-top: 5px;
+    }
+    
+    /* 6. Bölüm Ayırıcı Çizgi */
+    hr {
+        margin-top: 0.5em !important;
+        margin-bottom: 0.5em !important;
+        border-color: #eee;
+    }
+    
+    /* 7. Buton Stili */
     .stButton>button {
-        width: 100%;
-        border-radius: 4px;
-        height: 2.5rem;
-        font-size: 0.9rem;
-    }
-    
-    /* 6. Mobil İyileştirmesi: Grafik Alanı */
-    [data-testid="stPlotlyChart"] {
-        min-height: 400px;
+        height: 2.2rem;
+        line-height: 1;
+        font-weight: bold;
     }
     </style>
 """, unsafe_allow_html=True)
@@ -65,7 +63,7 @@ st.markdown("""
 if "lengths" not in st.session_state:
     st.session_state.lengths = [100.0, 100.0] 
     st.session_state.angles = [90.0]
-    st.session_state.dirs = ["YUKARI ⤴️"]
+    st.session_state.dirs = ["UP"]
 
 # --- PRESET YÜKLEME ---
 def load_preset(new_lengths, new_angles, new_dirs):
@@ -99,7 +97,9 @@ def generate_solid_and_dimensions(lengths, angles, dirs, thickness, inner_radius
         if i < len(angles):
             user_angle = angles[i]
             d_str = dirs[i]
-            dir_val = 1 if "YUKARI" in d_str else -1
+            # UP / DOWN Mantığı
+            dir_val = 1 if d_str == "UP" else -1
+            
             if user_angle == 180:
                 dev_deg = 0
                 dir_val = 0
@@ -164,13 +164,13 @@ def generate_solid_and_dimensions(lengths, angles, dirs, thickness, inner_radius
             dev = deviation_radians[i]
             d_val = directions[i]
             
-            if d_val == 1:
+            if d_val == 1: # UP
                 cx = curr_pos_x - nx * inner_radius
                 cy = curr_pos_y - ny * inner_radius
                 r_t, r_b = inner_radius, outer_radius
                 start_a = curr_dir_ang - np.pi/2
                 end_a = start_a + dev
-            else:
+            else: # DOWN
                 cx = curr_pos_x + nx * outer_radius
                 cy = curr_pos_y + ny * outer_radius
                 r_t, r_b = outer_radius, inner_radius
@@ -242,7 +242,6 @@ def add_dims(fig, apex_x, apex_y, directions, lengths, angles):
         dev_deg = 180 - val
         
         bisector = curr_abs_ang + np.radians(dev_deg * d_val / 2) - (np.pi/2 * d_val)
-        
         dist = 50
         txt_x = corner[0] + dist * np.cos(bisector)
         txt_y = corner[1] + dist * np.sin(bisector)
@@ -254,69 +253,74 @@ def add_dims(fig, apex_x, apex_y, directions, lengths, angles):
         )
         curr_abs_ang += np.radians(dev_deg * d_val)
 
-# --- ANA ARAYÜZ ---
-# Sidebar (Sol Menü) Mobil'de gizlenir, Desktop'ta solda durur.
+# --- SIDEBAR: KONTROL PANELİ ---
 with st.sidebar:
-    st.title("🛠️ Kontrol Paneli")
+    st.markdown("### ⚙️ Sac ve Kalıp Ayarları") # Başlık Güncellendi
     
-    # 1. AYARLAR (Yan Yana)
-    st.markdown("#### Sac ve Kalıp")
-    c_th, c_rad = st.columns(2)
-    th = c_th.number_input("Kalınlık", min_value=0.1, max_value=50.0, value=2.0, step=0.1)
-    rad = c_rad.number_input("R-Bıçak", min_value=0.8, max_value=50.0, value=0.8, step=0.1)
+    # AYARLAR (Yan Yana ve Sıkışık)
+    c1, c2 = st.columns(2)
+    with c1:
+        st.markdown('<p class="compact-label">Kalınlık (mm)</p>', unsafe_allow_html=True)
+        th = st.number_input("th", min_value=0.1, max_value=50.0, value=2.0, step=0.1, label_visibility="collapsed")
+    with c2:
+        st.markdown('<p class="compact-label">Bıçak Radius (mm)</p>', unsafe_allow_html=True)
+        rad = st.number_input("rad", min_value=0.8, max_value=50.0, value=0.8, step=0.1, label_visibility="collapsed")
 
     st.markdown("---")
-
-    # 2. HIZLI İŞLEMLER
-    st.markdown("#### Şablonlar")
+    
+    # ŞABLONLAR
+    st.markdown('<p class="compact-label" style="font-size:1em;">🚀 Hızlı Şablonlar</p>', unsafe_allow_html=True)
     b1, b2, b3, b4 = st.columns(4)
-    if b1.button("L"): load_preset([100.0, 100.0], [90.0], ["YUKARI ⤴️"]); st.rerun()
-    if b2.button("U"): load_preset([100.0, 100.0, 100.0], [90.0, 90.0], ["YUKARI ⤴️", "YUKARI ⤴️"]); st.rerun()
-    if b3.button("Z"): load_preset([100.0, 80.0, 100.0], [90.0, 90.0], ["YUKARI ⤴️", "AŞAĞI ⤵️"]); st.rerun()
-    if b4.button("X"): load_preset([100.0, 100.0], [90.0], ["YUKARI ⤴️"]); st.rerun()
+    if b1.button("L"): load_preset([100.0, 100.0], [90.0], ["UP"]); st.rerun()
+    if b2.button("U"): load_preset([100.0, 100.0, 100.0], [90.0, 90.0], ["UP", "UP"]); st.rerun()
+    if b3.button("Z"): load_preset([100.0, 80.0, 100.0], [90.0, 90.0], ["UP", "DOWN"]); st.rerun()
+    if b4.button("X"): load_preset([100.0, 100.0], [90.0], ["UP"]); st.rerun()
 
     st.markdown("---")
-    
-    # 3. GİRİŞLER (KOMPAKT)
-    st.markdown("#### Ölçü Girişi")
 
-    # Başlangıç
-    st.markdown('<p class="compact-header">1. Başlangıç Kenarı (mm)</p>', unsafe_allow_html=True)
+    # ÖLÇÜ GİRİŞİ
+    st.markdown('<p class="compact-label" style="font-size:1em;">✏️ Ölçü Girişi</p>', unsafe_allow_html=True)
+
+    # 1. Başlangıç
+    st.markdown('<p class="compact-label" style="color:#0068C9;">1. Başlangıç Kenarı (mm)</p>', unsafe_allow_html=True)
     st.session_state.lengths[0] = st.number_input("len_0", value=float(st.session_state.lengths[0]), min_value=1.0, step=0.1, label_visibility="collapsed")
-    
-    # Döngüsel Giriş (TEK SATIRDA 3 KUTU)
-    # Mobilde yer kazanmak için sütun oranlarını ayarlıyoruz
+
+    # 2. Döngü
     for i in range(len(st.session_state.angles)):
-        st.markdown(f'<p class="compact-header" style="margin-top:10px;">{i+1}. Büküm ve Sonrası</p>', unsafe_allow_html=True)
+        st.markdown(f'<p class="compact-label" style="color:#0068C9; margin-top:8px;">{i+1}. Büküm ve Sonrası</p>', unsafe_allow_html=True)
         
-        # Grid yapısı: [ Uzunluk (40%) ] [ Açı (30%) ] [ Yön (30%) ]
-        c1, c2, c3 = st.columns([1.2, 0.9, 1.1])
+        # Grid: [Uzunluk] [Açı] [Yön]
+        # Mobilde butonların sığması için oranlar
+        col_len, col_ang, col_dir = st.columns([1.3, 1.0, 1.2])
         
-        with c1:
+        with col_len:
+            st.markdown('<p class="compact-label">Kenar</p>', unsafe_allow_html=True)
             st.session_state.lengths[i+1] = st.number_input(
                 f"L{i}", value=float(st.session_state.lengths[i+1]), min_value=1.0, step=0.1, 
-                key=f"len_{i+1}", label_visibility="collapsed", help="Sonraki Kenar"
+                key=f"len_{i+1}", label_visibility="collapsed"
             )
-        with c2:
+        with col_ang:
+            st.markdown('<p class="compact-label">Açı°</p>', unsafe_allow_html=True)
             st.session_state.angles[i] = st.number_input(
                 f"A{i}", value=float(st.session_state.angles[i]), min_value=1.0, max_value=180.0, 
-                key=f"ang_{i}", label_visibility="collapsed", help="Açı"
+                key=f"ang_{i}", label_visibility="collapsed"
             )
-        with c3:
-            curr_idx = 0 if st.session_state.dirs[i] == "YUKARI ⤴️" else 1
+        with col_dir:
+            st.markdown('<p class="compact-label">Yön</p>', unsafe_allow_html=True)
+            curr_idx = 0 if st.session_state.dirs[i] == "UP" else 1
             st.session_state.dirs[i] = st.selectbox(
-                f"D{i}", ["YUKARI ⤴️", "AŞAĞI ⤵️"], index=curr_idx, 
-                key=f"dir_{i}", label_visibility="collapsed", help="Yön"
+                f"D{i}", ["UP", "DOWN"], index=curr_idx, 
+                key=f"dir_{i}", label_visibility="collapsed"
             )
 
     st.markdown("---")
     
-    # 4. EKLE / SİL (Yan Yana)
+    # BUTONLAR
     c_add, c_del = st.columns(2)
     if c_add.button("➕ EKLE"):
         st.session_state.lengths.append(50.0) 
         st.session_state.angles.append(90.0)   
-        st.session_state.dirs.append("YUKARI ⤴️")
+        st.session_state.dirs.append("UP")
         st.rerun()
     if c_del.button("🗑️ SİL"):
         if len(st.session_state.angles) > 0:
@@ -326,7 +330,6 @@ with st.sidebar:
             st.rerun()
 
 # --- ANA EKRAN (GRAFİK) ---
-# Sol menü kapalıyken burası tam ekran olur.
 sx, sy, ax, ay, drs = generate_solid_and_dimensions(
     st.session_state.lengths, 
     st.session_state.angles, 
@@ -336,27 +339,29 @@ sx, sy, ax, ay, drs = generate_solid_and_dimensions(
 
 fig = go.Figure()
 
+# Katı Model
 fig.add_trace(go.Scatter(
-    x=sx, y=sy, fill='toself', fillcolor='rgba(70, 130, 180, 0.5)', # Daha profesyonel mavi
+    x=sx, y=sy, fill='toself', fillcolor='rgba(70, 130, 180, 0.4)',
     line=dict(color='#004a80', width=2), mode='lines',
     hoverinfo='skip'
 ))
 
 add_dims(fig, ax, ay, drs, st.session_state.lengths, st.session_state.angles)
 
-# Başlık ve Bilgi
-st.markdown("### 📐 Simülasyon Önizleme")
+# Başlık (Büküm Simülasyonu)
+st.markdown("### 📐 Büküm Simülasyonu") # Başlık Güncellendi
+
 total_len = sum(st.session_state.lengths)
-st.caption(f"Toplam Açınım (Kaba): {total_len:.1f} mm | Malzeme: {th}mm | Bıçak: R{rad}")
+st.caption(f"Toplam Dış Ölçü: {total_len:.1f} mm | Kalınlık: {th}mm | R: {rad}mm")
 
 fig.update_layout(
-    height=600, # Mobilde de iyi görünsün
+    height=600,
     dragmode='pan', 
     showlegend=False,
     hovermode=False,
-    xaxis=dict(showgrid=True, gridcolor='#f0f2f6', zeroline=False, visible=False, scaleanchor="y"),
-    yaxis=dict(showgrid=True, gridcolor='#f0f2f6', zeroline=False, visible=False),
+    xaxis=dict(showgrid=True, gridcolor='#f4f4f4', zeroline=False, visible=False, scaleanchor="y"),
+    yaxis=dict(showgrid=True, gridcolor='#f4f4f4', zeroline=False, visible=False),
     plot_bgcolor="white",
-    margin=dict(l=10, r=10, t=10, b=10)
+    margin=dict(l=5, r=5, t=10, b=10)
 )
 st.plotly_chart(fig, use_container_width=True)
