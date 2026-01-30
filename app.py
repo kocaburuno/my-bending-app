@@ -9,7 +9,6 @@ st.set_page_config(page_title="Büküm Simülasyonu", layout="wide", page_icon="
 # --- CSS: ULTRA KOMPAKT VE TEMİZ ---
 st.markdown("""
     <style>
-    /* Sayfa ve Konteyner Ayarları */
     .block-container {
         padding-top: 3.5rem !important;
         padding-bottom: 1rem !important;
@@ -19,23 +18,16 @@ st.markdown("""
     [data-testid="stSidebar"] .block-container {
         padding-top: 2rem; padding-bottom: 2rem;
     }
-    
-    /* Input ve Buton Sıkılaştırma */
     .stNumberInput, .stSelectbox, .stButton {
         margin-bottom: 3px !important; margin-top: 0px !important;
     }
-    
-    /* Özel Etiket Stilleri */
     .compact-label {
         font-size: 0.85rem; font-weight: 600; color: #444; margin-bottom: 2px; margin-top: 8px;
     }
-    
-    /* Buton Tasarımı */
     .stButton>button {
         height: 2.2rem; line-height: 1; font-weight: bold; border: 1px solid #ddd;
     }
-    
-    /* Sonuç Kartı Stili (Açınım Hesabı İçin) */
+    /* Sonuç Kartı Stili */
     .result-card {
         background-color: #f0f9ff; /* Açık Mavi */
         border: 1px solid #bae6fd;
@@ -233,7 +225,7 @@ def add_dims(fig, apex_x, apex_y, directions, lengths, angles):
 with st.sidebar:
     st.markdown("### ⚙️ Sac ve Kalıp Ayarları")
     
-    # 1. AYARLAR (Yan Yana, formatlı birim, aynı hizada)
+    # 1. AYARLAR (Yan Yana, formatlı birim)
     c1, c2 = st.columns(2)
     with c1:
         st.markdown('<p class="compact-label">Kalınlık</p>', unsafe_allow_html=True)
