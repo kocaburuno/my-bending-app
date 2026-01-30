@@ -29,15 +29,17 @@ st.markdown("""
     }
     /* Sonuç Kartı Stili */
     .result-card {
-        background-color: #e6fffa;
-        border: 1px solid #b2f5ea;
+        background-color: #f0f9ff; /* Açık Mavi */
+        border: 1px solid #bae6fd;
         padding: 15px;
         border-radius: 8px;
         text-align: center;
         margin-bottom: 15px;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
     }
-    .result-title { font-size: 0.9em; color: #2c7a7b; font-weight: bold; }
-    .result-value { font-size: 1.8em; color: #234e52; font-weight: bold; }
+    .result-title { font-size: 0.95em; color: #0284c7; font-weight: bold; margin-bottom: 5px; }
+    .result-value { font-size: 2.0em; color: #0c4a6e; font-weight: bold; }
+    .result-sub { font-size: 0.85em; color: #64748b; margin-top: 5px; }
     </style>
 """, unsafe_allow_html=True)
 
@@ -61,25 +63,26 @@ def load_preset(new_lengths, new_angles, new_dirs):
 # --- BASİT AÇINIM HESAPLAMA (ÖZEL İSTEK) ---
 def calculate_flat_pattern(lengths, angles, thickness):
     """
-    Kullanıcı İsteği: 
-    - Toplam dış ölçüleri topla.
-    - 90 derece büküm için 1xKalınlık düş.
-    - Diğer açılar için sapma açısına göre orantıla.
+    Kullanıcı Kuralı:
+    1. Toplam Dış Ölçü hesaplanır.
+    2. 90 derece büküm (90 derece sapma) için sac kalınlığı (T) kadar düşülür.
+    3. Diğer açılar için sapma açısına göre orantı kurulur.
+       Düşüm = T * (Sapma / 90)
     """
     total_outer = sum(lengths)
     total_deduction = 0
     
     for ang in angles:
-        if ang == 180: continue # Büküm yok
+        if ang == 180: continue # Büküm yok, düşüm yok
         
-        # Sapma Açısı (Deviation): Düzden ne kadar saptık?
-        # 90 derece büküm (iç açı 90) -> Sapma 90
-        # 135 derece büküm (hafif büküm) -> Sapma 45
+        # Sapma Açısı (Deviation)
+        # 90 derece iç açı -> 90 derece sapma
+        # 135 derece iç açı -> 45 derece sapma
         deviation = abs(180 - ang)
         
-        # BASİT KURAL: 
-        # 90 derece sapmada -> Kalınlık (T) kadar düş.
-        # Orantı: (Sapma / 90) * T
+        # Formül: (Sapma / 90) * Kalınlık
+        # 90 derece sapmada -> 1 * T düşer.
+        # 45 derece sapmada -> 0.5 * T düşer.
         deduction = thickness * (deviation / 90.0)
         
         total_deduction += deduction
@@ -213,7 +216,7 @@ def add_dims(fig, apex_x, apex_y, directions, lengths, angles):
         txt_y = corner[1] + 40 * np.sin(bisector)
         fig.add_annotation(
             x=txt_x, y=txt_y, ax=corner[0], ay=corner[1],
-            text=f"<b>{int(angles[i])} °</b>", showarrow=True, arrowhead=0, arrowwidth=1, arrowcolor='#999',
+            text=f"<b>{int(angles[i])}°</b>", showarrow=True, arrowhead=0, arrowwidth=1, arrowcolor='#999',
             font=dict(color="blue", size=11), bgcolor="white", opacity=1.0
         )
         curr_abs_ang += np.radians(dev_deg * d_val)
@@ -222,16 +225,16 @@ def add_dims(fig, apex_x, apex_y, directions, lengths, angles):
 with st.sidebar:
     st.markdown("### ⚙️ Sac ve Kalıp Ayarları")
     
-    # 1. AYARLAR (Güncellendi: Başlıklar sade, birim kutu içinde)
+    # 1. AYARLAR (Yan Yana, formatlı birim)
     c1, c2 = st.columns(2)
     with c1:
         st.markdown('<p class="compact-label">Kalınlık</p>', unsafe_allow_html=True)
         th = st.number_input("th", min_value=0.1, max_value=50.0, value=2.0, step=0.1, 
-                             format="%.1f mm", label_visibility="collapsed")
+                             format="%.2f mm", label_visibility="collapsed")
     with c2:
         st.markdown('<p class="compact-label">Bıçak Radius</p>', unsafe_allow_html=True)
         rad = st.number_input("rad", min_value=0.8, max_value=50.0, value=0.8, step=0.1, 
-                              format="%.1f mm", label_visibility="collapsed")
+                              format="%.2f mm", label_visibility="collapsed")
 
     st.markdown("---")
     
@@ -297,8 +300,8 @@ st.markdown(f"""
 <div class="result-card">
     <div class="result-title">TOPLAM SAC AÇINIMI (LAZER KESİM ÖLÇÜSÜ)</div>
     <div class="result-value">{flat_len:.2f} mm</div>
-    <div style="font-size:0.8em; color:#666; margin-top:5px;">
-        (Toplam Dış Ölçü: {total_outer:.1f} mm | Büküm Kayıpları: {total_outer - flat_len:.2f} mm)
+    <div class="result-sub">
+        (Toplam Dış Ölçü: {total_outer:.1f} mm | Büküm Kayıpları: -{total_outer - flat_len:.2f} mm)
     </div>
 </div>
 """, unsafe_allow_html=True)
