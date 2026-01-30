@@ -6,10 +6,10 @@ import pandas as pd
 # --- SAYFA AYARLARI ---
 st.set_page_config(page_title="Büküm Simülasyonu", layout="wide", page_icon="📐", initial_sidebar_state="expanded")
 
-# --- CSS: ULTRA KOMPAKT (BOŞLUKLARI YOK ET) ---
+# --- CSS: GÜVENLİ KOMPAKT TASARIM ---
 st.markdown("""
     <style>
-    /* 1. Ana Sayfa Kenar Boşluklarını Minimuma İndir */
+    /* 1. Sayfa Kenar Boşlukları */
     .block-container {
         padding-top: 0.5rem !important;
         padding-bottom: 1rem !important;
@@ -17,44 +17,33 @@ st.markdown("""
         padding-right: 0.5rem !important;
     }
     
-    /* 2. Sidebar İç Boşluklarını Kıs */
+    /* 2. Sidebar Sıkılaştırma (Güvenli Boşluk) */
     [data-testid="stSidebar"] .block-container {
         padding-top: 1rem;
-        padding-bottom: 1rem;
+        padding-bottom: 2rem;
     }
     
-    /* 3. Bileşenler Arasındaki Dikey Boşluğu (Gap) Azalt */
-    div[data-testid="stVerticalBlock"] {
-        gap: 0.3rem !important;
-    }
-    
-    /* 4. Input Kutularının Alt/Üst Boşluklarını Sil */
+    /* 3. Input Kutuları (Hafif nefes payı ile çakışmayı önle) */
     .stNumberInput, .stSelectbox, .stButton {
-        margin-bottom: 0px !important;
+        margin-bottom: 3px !important; /* 0px yerine 3px güvenli aralık */
         margin-top: 0px !important;
     }
     
-    /* 5. Özel Başlıklar (Compact Header) */
+    /* 4. Başlıklar */
     .compact-label {
-        font-size: 0.8rem;
+        font-size: 0.85rem;
         font-weight: 600;
         color: #444;
         margin-bottom: 2px;
-        margin-top: 5px;
+        margin-top: 8px;
     }
     
-    /* 6. Bölüm Ayırıcı Çizgi */
-    hr {
-        margin-top: 0.5em !important;
-        margin-bottom: 0.5em !important;
-        border-color: #eee;
-    }
-    
-    /* 7. Buton Stili */
+    /* 5. Butonlar */
     .stButton>button {
         height: 2.2rem;
         line-height: 1;
         font-weight: bold;
+        border: 1px solid #ddd;
     }
     </style>
 """, unsafe_allow_html=True)
@@ -97,9 +86,7 @@ def generate_solid_and_dimensions(lengths, angles, dirs, thickness, inner_radius
         if i < len(angles):
             user_angle = angles[i]
             d_str = dirs[i]
-            # UP / DOWN Mantığı
             dir_val = 1 if d_str == "UP" else -1
-            
             if user_angle == 180:
                 dev_deg = 0
                 dir_val = 0
@@ -164,13 +151,13 @@ def generate_solid_and_dimensions(lengths, angles, dirs, thickness, inner_radius
             dev = deviation_radians[i]
             d_val = directions[i]
             
-            if d_val == 1: # UP
+            if d_val == 1:
                 cx = curr_pos_x - nx * inner_radius
                 cy = curr_pos_y - ny * inner_radius
                 r_t, r_b = inner_radius, outer_radius
                 start_a = curr_dir_ang - np.pi/2
                 end_a = start_a + dev
-            else: # DOWN
+            else:
                 cx = curr_pos_x + nx * outer_radius
                 cy = curr_pos_y + ny * outer_radius
                 r_t, r_b = outer_radius, inner_radius
@@ -192,9 +179,11 @@ def generate_solid_and_dimensions(lengths, angles, dirs, thickness, inner_radius
     
     return final_x, final_y, apex_x, apex_y, directions
 
-# --- ÖLÇÜLENDİRME ---
+# --- ÖLÇÜLENDİRME (DAR & TEMİZ) ---
 def add_dims(fig, apex_x, apex_y, directions, lengths, angles):
-    dim_offset = 50 
+    # DAR TASARIM: Ofseti 50'den 30'a düşürdük (Parçaya yakın)
+    dim_offset = 30 
+    
     for i in range(len(lengths)):
         p1 = np.array([apex_x[i], apex_y[i]])
         p2 = np.array([apex_x[i+1], apex_y[i+1]])
@@ -214,23 +203,36 @@ def add_dims(fig, apex_x, apex_y, directions, lengths, angles):
         dim_p2 = p2 + normal * dim_offset * side
         mid_p = (dim_p1 + dim_p2) / 2
         
+        # Akıllı Ok Boyutu: Parça kısaysa (30mm altı) okları küçült
+        arrow_size = 8 if L > 30 else 5
+        
+        # Ok Çizgisi
         fig.add_trace(go.Scatter(
             x=[dim_p1[0], dim_p2[0]], y=[dim_p1[1], dim_p2[1]],
             mode='lines+markers',
-            marker=dict(symbol='arrow', size=8, angleref="previous", color='black'),
-            line=dict(color='black', width=1), hoverinfo='skip'
+            marker=dict(symbol='arrow', size=arrow_size, angleref="previous", color='black'),
+            line=dict(color='black', width=1), 
+            hoverinfo='skip'
         ))
+        
+        # Yazı (SOLID BACKGROUND - Üste binmeyi engeller)
         fig.add_annotation(
             x=mid_p[0], y=mid_p[1], text=f"<b>{lengths[i]:.1f}</b>",
-            showarrow=False, yshift=10*side, font=dict(color="#B22222", size=14),
-            bgcolor="rgba(255,255,255,0.8)"
+            showarrow=False, yshift=8*side, 
+            font=dict(color="#B22222", size=13),
+            bgcolor="white", # Tam Beyaz Arka Plan
+            opacity=1.0      # Alttaki çizgiyi gizle
         )
+        
+        # Uzatma Çizgileri
         fig.add_trace(go.Scatter(
             x=[p1[0], dim_p1[0], None, p2[0], dim_p2[0]], 
             y=[p1[1], dim_p1[1], None, p2[1], dim_p2[1]],
-            mode='lines', line=dict(color='gray', width=0.5, dash='dot'), hoverinfo='skip'
+            mode='lines', line=dict(color='gray', width=0.5, dash='dot'), 
+            hoverinfo='skip'
         ))
 
+    # Açı Ölçüleri
     curr_abs_ang = 0
     for i in range(len(angles)):
         val = angles[i]
@@ -242,22 +244,26 @@ def add_dims(fig, apex_x, apex_y, directions, lengths, angles):
         dev_deg = 180 - val
         
         bisector = curr_abs_ang + np.radians(dev_deg * d_val / 2) - (np.pi/2 * d_val)
-        dist = 50
+        
+        # Açı yazısını da makul bir mesafeye koy (40 birim)
+        dist = 40
         txt_x = corner[0] + dist * np.cos(bisector)
         txt_y = corner[1] + dist * np.sin(bisector)
         
         fig.add_annotation(
             x=txt_x, y=txt_y, ax=corner[0], ay=corner[1],
-            text=f"<b>{int(val)}°</b>", showarrow=True, arrowhead=0,
-            font=dict(color="blue", size=12), bgcolor="rgba(255,255,255,0.7)"
+            text=f"<b>{int(val)}°</b>", showarrow=True, arrowhead=0, arrowwidth=1, arrowcolor='#999',
+            font=dict(color="blue", size=11), 
+            bgcolor="white", 
+            opacity=1.0
         )
         curr_abs_ang += np.radians(dev_deg * d_val)
 
 # --- SIDEBAR: KONTROL PANELİ ---
 with st.sidebar:
-    st.markdown("### ⚙️ Sac ve Kalıp Ayarları") # Başlık Güncellendi
+    st.markdown("### ⚙️ Sac ve Kalıp Ayarları")
     
-    # AYARLAR (Yan Yana ve Sıkışık)
+    # AYARLAR (Yan Yana)
     c1, c2 = st.columns(2)
     with c1:
         st.markdown('<p class="compact-label">Kalınlık (mm)</p>', unsafe_allow_html=True)
@@ -290,27 +296,26 @@ with st.sidebar:
         st.markdown(f'<p class="compact-label" style="color:#0068C9; margin-top:8px;">{i+1}. Büküm ve Sonrası</p>', unsafe_allow_html=True)
         
         # Grid: [Uzunluk] [Açı] [Yön]
-        # Mobilde butonların sığması için oranlar
         col_len, col_ang, col_dir = st.columns([1.3, 1.0, 1.2])
         
         with col_len:
             st.markdown('<p class="compact-label">Kenar</p>', unsafe_allow_html=True)
             st.session_state.lengths[i+1] = st.number_input(
                 f"L{i}", value=float(st.session_state.lengths[i+1]), min_value=1.0, step=0.1, 
-                key=f"len_{i+1}", label_visibility="collapsed"
+                key=f"len_{i+1}", label_visibility="collapsed", help="Sonraki Kenar"
             )
         with col_ang:
             st.markdown('<p class="compact-label">Açı°</p>', unsafe_allow_html=True)
             st.session_state.angles[i] = st.number_input(
                 f"A{i}", value=float(st.session_state.angles[i]), min_value=1.0, max_value=180.0, 
-                key=f"ang_{i}", label_visibility="collapsed"
+                key=f"ang_{i}", label_visibility="collapsed", help="Açı"
             )
         with col_dir:
             st.markdown('<p class="compact-label">Yön</p>', unsafe_allow_html=True)
             curr_idx = 0 if st.session_state.dirs[i] == "UP" else 1
             st.session_state.dirs[i] = st.selectbox(
                 f"D{i}", ["UP", "DOWN"], index=curr_idx, 
-                key=f"dir_{i}", label_visibility="collapsed"
+                key=f"dir_{i}", label_visibility="collapsed", help="Yön"
             )
 
     st.markdown("---")
@@ -348,8 +353,8 @@ fig.add_trace(go.Scatter(
 
 add_dims(fig, ax, ay, drs, st.session_state.lengths, st.session_state.angles)
 
-# Başlık (Büküm Simülasyonu)
-st.markdown("### 📐 Büküm Simülasyonu") # Başlık Güncellendi
+# Başlık
+st.markdown("### 📐 Büküm Simülasyonu")
 
 total_len = sum(st.session_state.lengths)
 st.caption(f"Toplam Dış Ölçü: {total_len:.1f} mm | Kalınlık: {th}mm | R: {rad}mm")
