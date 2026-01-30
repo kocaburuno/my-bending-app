@@ -85,18 +85,23 @@ def load_preset(new_lengths, new_angles, new_dirs):
         st.session_state[f"ang_{i}"] = new_angles[i]
         st.session_state[f"dir_{i}"] = new_dirs[i]
 
-# --- BASİT AÇINIM HESAPLAMA ---
-def calculate_flat_pattern(lengths, angles, thickness):
+# --- BASİT HESAPLAMA MOTORU ---
+def calculate_flat_pattern(lengths, angles, thickness, radius):
+    """
+    Kullanıcı İsteği: Basit Formül
+    Mantık: (L1 - 2*t) + (L2 - 2*t) ... 
+    Her büküm için dış ölçüden 2 x Kalınlık düşülür.
+    """
     total_outer = sum(lengths)
+    # Her büküm noktası için (len(lengths)-1 adet büküm vardır)
+    num_bends = len(angles)
     total_deduction = 0
     
     for ang in angles:
-        if ang == 180: continue # Büküm yok
-        
-        # Basit Kural: 90 derece sapmada 1xKalınlık düş
-        deviation = abs(180 - ang)
-        deduction = thickness * (deviation / 90.0)
-        total_deduction += deduction
+        if ang >= 180: continue
+        # 90 derece bükümde 2*t düşer. Açıya göre oranlayalım.
+        deviation = (180 - ang) / 90.0
+        total_deduction += (2 * thickness) * deviation
         
     flat_length = total_outer - total_deduction
     return flat_length, total_outer
@@ -242,11 +247,11 @@ with st.sidebar:
     with c1:
         st.markdown('<span class="compact-label">Kalınlık</span>', unsafe_allow_html=True)
         th = st.number_input("th_input", min_value=0.1, max_value=50.0, value=2.0, step=0.1, 
-                             format="%.2f mm", label_visibility="collapsed")
+                             format="%.2f", label_visibility="collapsed")
     with c2:
         st.markdown('<span class="compact-label">Bıçak Radius</span>', unsafe_allow_html=True)
         rad = st.number_input("rad_input", min_value=0.8, max_value=50.0, value=0.8, step=0.1, 
-                              format="%.2f mm", label_visibility="collapsed")
+                              format="%.2f", label_visibility="collapsed")
 
     st.markdown("---")
     
@@ -294,33 +299,169 @@ with st.sidebar:
         if len(st.session_state.angles) > 0: st.session_state.lengths.pop(); st.session_state.angles.pop(); st.session_state.dirs.pop(); st.rerun()
 
 # --- ANA EKRAN ---
-# Hesaplamalar
-sx, sy, ax, ay, drs = generate_solid_and_dimensions(st.session_state.lengths, st.session_state.angles, st.session_state.dirs, th, rad)
-flat_len, total_outer = calculate_flat_pattern(st.session_state.lengths, st.session_state.angles, th)
+tab1, tab2 = st.tabs(["📐 Tasarım ve Hesaplama", "🎬 Büküm Simülasyonu (Operatör)"])
 
-# Grafik
-fig = go.Figure()
-fig.add_trace(go.Scatter(x=sx, y=sy, fill='toself', fillcolor='rgba(70, 130, 180, 0.4)', line=dict(color='#004a80', width=2), mode='lines', hoverinfo='skip'))
-add_dims(fig, ax, ay, drs, st.session_state.lengths, st.session_state.angles)
+with tab1:
+    # Hesaplamalar
+    sx, sy, ax, ay, drs = generate_solid_and_dimensions(st.session_state.lengths, st.session_state.angles, st.session_state.dirs, th, rad)
+    flat_len, total_outer = calculate_flat_pattern(st.session_state.lengths, st.session_state.angles, th, rad)
 
-fig.update_layout(
-    height=600, dragmode='pan', showlegend=False, hovermode=False,
-    xaxis=dict(showgrid=True, gridcolor='#f4f4f4', zeroline=False, visible=False, scaleanchor="y"),
-    yaxis=dict(showgrid=True, gridcolor='#f4f4f4', zeroline=False, visible=False),
-    plot_bgcolor="white", margin=dict(l=10, r=10, t=10, b=10)
-)
+    # Grafik
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=sx, y=sy, fill='toself', fillcolor='rgba(70, 130, 180, 0.4)', line=dict(color='#004a80', width=2), mode='lines', hoverinfo='skip'))
+    add_dims(fig, ax, ay, drs, st.session_state.lengths, st.session_state.angles)
 
-st.markdown("### 📐 Büküm Simülasyonu")
+    fig.update_layout(
+        height=600, dragmode='pan', showlegend=False, hovermode=False,
+        xaxis=dict(showgrid=True, gridcolor='#f4f4f4', zeroline=False, visible=False, scaleanchor="y"),
+        yaxis=dict(showgrid=True, gridcolor='#f4f4f4', zeroline=False, visible=False),
+        plot_bgcolor="white", margin=dict(l=10, r=10, t=10, b=10)
+    )
 
-# Sonuç Kartı
-st.markdown(f"""
-<div class="result-card">
-    <div class="result-title">TOPLAM SAC AÇINIMI (LAZER KESİM ÖLÇÜSÜ)</div>
-    <div class="result-value">{flat_len:.2f} mm</div>
-    <div class="result-sub">
-        (Toplam Dış Ölçü: {total_outer:.1f} mm | Büküm Kayıpları: -{total_outer - flat_len:.2f} mm)
+    st.markdown("### 📐 Büküm Simülasyonu")
+
+    # Sonuç Kartı
+    st.markdown(f"""
+    <div class="result-card">
+        <div class="result-title">TOPLAM SAC AÇINIMI (LAZER KESİM ÖLÇÜSÜ)</div>
+        <div class="result-value">{flat_len:.2f} mm</div>
+        <div class="result-sub">
+            Formül: (Dış Ölçüler Toplamı) - (Büküm Sayısı x 2 x Kalınlık)<br>
+            (Toplam Dış Ölçü: {total_outer:.1f} mm | Toplam Kayıp: -{total_outer - flat_len:.2f} mm)
+        </div>
     </div>
-</div>
-""", unsafe_allow_html=True)
+    """, unsafe_allow_html=True)
 
-st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True)
+
+with tab2:
+    st.markdown("### 🎬 Operatör Büküm Adımları")
+    
+    num_steps = len(st.session_state.angles)
+    if num_steps == 0:
+        st.info("Henüz büküm eklenmedi.")
+    else:
+        # Animasyon Kontrolleri
+        col_ctrl1, col_ctrl2 = st.columns([1, 4])
+        auto_play = col_ctrl1.toggle("Otomatik Oynat", value=False)
+        
+        if auto_play:
+            if "anim_step" not in st.session_state:
+                st.session_state.anim_step = 0
+            
+            # Otomatik ilerleme mantığı
+            import time
+            placeholder = st.empty()
+            
+            for s in range(st.session_state.anim_step, num_steps + 1):
+                st.session_state.anim_step = s
+                
+                # Dinamik parça oluşturma
+                current_angles = [180.0] * num_steps
+                for i in range(s):
+                    current_angles[i] = st.session_state.angles[i]
+                
+                tsx, tsy, tax, tay, tdrs = generate_solid_and_dimensions(st.session_state.lengths, current_angles, st.session_state.dirs, th, rad)
+                
+                fig_anim = go.Figure()
+                
+                # 3D GÖRÜNÜM (Sheet Metal Efekti)
+                depth = 100.0
+                off_x, off_y = 20, 20
+                
+                # Arka yüz ve yan bağlantılar
+                tsx_back = [x + off_x for x in tsx]
+                tsy_back = [y + off_y for y in tsy]
+                
+                # Sacın gövdesi (3D extrusion hissi)
+                for i in range(0, len(tsx)-1, 2):
+                    fig_anim.add_trace(go.Scatter(
+                        x=[tsx[i], tsx_back[i], tsx_back[i+1], tsx[i+1]],
+                        y=[tsy[i], tsy_back[i], tsy_back[i+1], tsy[i+1]],
+                        fill='toself', fillcolor='rgba(50, 100, 150, 0.3)',
+                        line=dict(width=0), hoverinfo='skip'
+                    ))
+
+                # Ön ve Arka Yüzler
+                fig_anim.add_trace(go.Scatter(x=tsx_back, y=tsy_back, fill='toself', fillcolor='rgba(100, 150, 200, 0.2)', line=dict(color='#004a80', width=1), name='Arka'))
+                fig_anim.add_trace(go.Scatter(x=tsx, y=tsy, fill='toself', fillcolor='rgba(70, 130, 180, 0.7)', line=dict(color='#004a80', width=2), name='Ön'))
+
+                # BIÇAK VE KALIP (V-DIE) GÖRSELLEŞTİRME
+                if s > 0:
+                    # Büküm noktasını bul (apex_x, apex_y büküm noktalarıdır)
+                    bx, by = tax[s], tay[s]
+                    
+                    # Üst Bıçak (Punch) - Üçgen form
+                    punch_x = [bx-20, bx, bx+20]
+                    punch_y = [by+40, by+5, by+40]
+                    fig_anim.add_trace(go.Scatter(x=punch_x, y=punch_y, fill='toself', fillcolor='rgba(150, 150, 150, 0.8)', line=dict(color='black', width=2), name='Bıçak'))
+                    
+                    # Alt Kalıp (V-Die)
+                    die_x = [bx-30, bx-15, bx, bx+15, bx+30]
+                    die_y = [by-40, by-40, by-10, by-40, by-40]
+                    fig_anim.add_trace(go.Scatter(x=die_x, y=die_y, fill='toself', fillcolor='rgba(100, 100, 100, 0.8)', line=dict(color='black', width=2), name='Kalıp'))
+
+                fig_anim.update_layout(
+                    height=600, showlegend=False,
+                    xaxis=dict(visible=False, scaleanchor="y"),
+                    yaxis=dict(visible=False),
+                    plot_bgcolor="white", margin=dict(l=10, r=10, t=10, b=10),
+                    title=f"Adım {s}: " + (f"{st.session_state.angles[s-1]}° Bükümü" if s > 0 else "Hazırlık")
+                )
+                
+                with placeholder.container():
+                    st.plotly_chart(fig_anim, use_container_width=True)
+                    if s > 0:
+                        st.info(f"💡 Operatör Notu: {st.session_state.angles[s-1]}° {st.session_state.dirs[s-1]} bükümünü gerçekleştirin.")
+                    else:
+                        st.success("Düz sacı yerleştirin.")
+                
+                time.sleep(1.5) # Slow motion hızı
+                
+            if st.session_state.anim_step >= num_steps:
+                if st.button("Simülasyonu Baştan Başlat"):
+                    st.session_state.anim_step = 0
+                    st.rerun()
+        else:
+            # Manuel Kontrol
+            step = st.select_slider("Büküm Adımı (Manuel)", options=list(range(num_steps + 1)), format_func=lambda x: f"Düz Sac" if x == 0 else f"{x}. Büküm")
+            
+            current_angles = [180.0] * num_steps
+            for i in range(step):
+                current_angles[i] = st.session_state.angles[i]
+                
+            tsx, tsy, tax, tay, tdrs = generate_solid_and_dimensions(st.session_state.lengths, current_angles, st.session_state.dirs, th, rad)
+            
+            fig_anim = go.Figure()
+            
+            # 3D GÖRÜNÜM
+            off_x, off_y = 20, 20
+            tsx_back = [x + off_x for x in tsx]
+            tsy_back = [y + off_y for y in tsy]
+            
+            # Sac Kalınlığı ve Derinliği
+            for i in range(0, len(tsx)-1, 2):
+                fig_anim.add_trace(go.Scatter(
+                    x=[tsx[i], tsx_back[i], tsx_back[i+1], tsx[i+1]],
+                    y=[tsy[i], tsy_back[i], tsy_back[i+1], tsy[i+1]],
+                    fill='toself', fillcolor='rgba(50, 100, 150, 0.3)', line=dict(width=0), hoverinfo='skip'
+                ))
+
+            fig_anim.add_trace(go.Scatter(x=tsx_back, y=tsy_back, fill='toself', fillcolor='rgba(100, 150, 200, 0.2)', line=dict(color='#004a80', width=1)))
+            fig_anim.add_trace(go.Scatter(x=tsx, y=tsy, fill='toself', fillcolor='rgba(70, 130, 180, 0.7)', line=dict(color='#004a80', width=2)))
+
+            # BIÇAK VE KALIP
+            if step > 0:
+                bx, by = tax[step], tay[step]
+                fig_anim.add_trace(go.Scatter(x=[bx-20, bx, bx+20], y=[by+40, by+5, by+40], fill='toself', fillcolor='rgba(150, 150, 150, 0.8)', line=dict(color='black', width=2)))
+                fig_anim.add_trace(go.Scatter(x=[bx-30, bx-15, bx, bx+15, bx+30], y=[by-40, by-40, by-10, by-40, by-40], fill='toself', fillcolor='rgba(100, 100, 100, 0.8)', line=dict(color='black', width=2)))
+
+            fig_anim.update_layout(
+                height=600, showlegend=False,
+                xaxis=dict(visible=False, scaleanchor="y"),
+                yaxis=dict(visible=False),
+                plot_bgcolor="white", margin=dict(l=10, r=10, t=10, b=10)
+            )
+            st.plotly_chart(fig_anim, use_container_width=True)
+
+
