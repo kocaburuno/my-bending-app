@@ -9,15 +9,19 @@ st.set_page_config(page_title="Pro Büküm Simülasyonu", layout="wide", page_ic
 st.markdown("""
     <style>
     .block-container {padding-top: 1rem; padding-bottom: 2rem;}
+    /* Tablo başlıklarını biraz daha belirgin yapalım */
+    [data-testid="stDataFrameResizable"] th {
+        font-size: 1.1rem !important;
+        color: #0068C9 !important;
+    }
     </style>
 """, unsafe_allow_html=True)
 
-# --- GELİŞMİŞ GEOMETRİ MOTORU (YÖN SEÇİMLİ) ---
+# --- GELİŞMİŞ GEOMETRİ MOTORU ---
 def calculate_precise_profile(df_steps, thickness, inner_radius):
     """
     Dıştan dışa ölçüleri ve UP/DOWN yön bilgisini baz alarak profil çıkarır.
     """
-    
     outer_radius = inner_radius + thickness
     
     # Listeler
@@ -39,10 +43,12 @@ def calculate_precise_profile(df_steps, thickness, inner_radius):
         direction_str = row['Yön']
         
         # Yönü sayısal değere çevir
-        if direction_str == "YUKARI":
+        if direction_str == "YUKARI ⤴️":
             direction_val = 1
-        else: # AŞAĞI
+        elif direction_str == "AŞAĞI ⤵️":
             direction_val = -1
+        else:
+            direction_val = 1 # Varsayılan
         
         if deg == 0:
             sb = 0
@@ -199,41 +205,63 @@ with col_left:
     
     st.divider()
     
-    st.subheader("2. Büküm Adımları")
-    st.caption("Aşağıdaki tabloya (+) butonuna basarak yeni adım ekleyebilirsiniz.")
+    st.subheader("2. Büküm Planı")
     
-    # --- YENİ TABLO YAPISI ---
-    # Varsayılan: 2 Adet Standart Girdi
-    default_data = [
-        {"Uzunluk (mm)": 100, "Açı (°)": 90, "Yön": "YUKARI"}, 
-        {"Uzunluk (mm)": 100, "Açı (°)": 90, "Yön": "YUKARI"}, 
-    ]
+    # Yardımcı Bilgi Kutusu
+    with st.expander("ℹ️ Tablo Nasıl Kullanılır?", expanded=True):
+        st.markdown("""
+        Her satır **bir kenarı ve sonundaki bükümü** temsil eder:
+        1.  **📏 Uzunluk:** Düz gidecek mesafeyi yazın.
+        2.  **📐 Açı:** O kenarın sonunda yapılacak büküm açısı (örn: 90°).
+        3.  **🔄 Yön:** Bükümün yukarı mı aşağı mı olacağını seçin.
+        """)
     
-    df_input = pd.DataFrame(default_data)
+    # Varsayılan Veriler
+    if "data" not in st.session_state:
+        st.session_state.data = [
+            {"Uzunluk (mm)": 100, "Açı (°)": 90, "Yön": "YUKARI ⤴️"}, 
+            {"Uzunluk (mm)": 100, "Açı (°)": 90, "Yön": "YUKARI ⤴️"}, 
+        ]
+
+    df_input = pd.DataFrame(st.session_state.data)
     
+    # TABLO DÜZENİ
     edited_df = st.data_editor(
         df_input,
-        num_rows="dynamic", # Alt satıra ekleme açık
+        num_rows="dynamic",
+        use_container_width=True, # Genişliği tam kullan
         column_config={
             "Uzunluk (mm)": st.column_config.NumberColumn(
+                "📏 Kenar Boyu", # Başlık Değişti
                 min_value=1, 
                 required=True,
-                format="%d"
+                format="%d mm",
+                help="Bükümden büküme olan dış mesafe"
             ),
             "Açı (°)": st.column_config.NumberColumn(
+                "📐 Büküm Açısı", # Başlık Değişti
                 min_value=0, 
                 max_value=180,
                 required=True,
-                help="Sadece pozitif açı değeri girin (Örn: 90)"
+                format="%d°"
             ),
             "Yön": st.column_config.SelectboxColumn(
-                options=["YUKARI", "AŞAĞI"],
+                "🔄 Büküm Yönü", # Başlık Değişti
+                options=["YUKARI ⤴️", "AŞAĞI ⤵️"],
                 required=True,
-                help="Büküm yönünü seçin"
+                help="Bükümün ne tarafa yapılacağı"
             )
         },
         hide_index=True
     )
+    
+    # Sıfırlama Butonu
+    if st.button("🔄 Standart Değerlere Sıfırla"):
+        st.session_state.data = [
+            {"Uzunluk (mm)": 100, "Açı (°)": 90, "Yön": "YUKARI ⤴️"}, 
+            {"Uzunluk (mm)": 100, "Açı (°)": 90, "Yön": "YUKARI ⤴️"}, 
+        ]
+        st.rerun()
 
 with col_right:
     if not edited_df.empty:
@@ -256,7 +284,6 @@ with col_right:
         min_x, max_x = min(fx), max(fx)
         min_y, max_y = min(fy), max(fy)
         
-        # Görüntü Oranını Koru
         fig.update_layout(
             height=600,
             dragmode='pan',
@@ -264,11 +291,11 @@ with col_right:
             xaxis=dict(showgrid=True, gridcolor='#eee', zeroline=True, scaleanchor="y", scaleratio=1, title="Uzunluk (mm)"),
             yaxis=dict(showgrid=True, gridcolor='#eee', zeroline=True, title="Yükseklik (mm)"),
             margin=dict(l=20, r=20, t=40, b=20),
-            title=dict(text="Profil Önizleme", x=0.5)
+            title=dict(text="Profil Önizleme", x=0.5, font=dict(size=20))
         )
         
         st.plotly_chart(fig, use_container_width=True)
         
         # Ölçü Bilgisi
         total_outer_len = edited_df["Uzunluk (mm)"].sum()
-        st.info(f"📐 Girilen Toplam Dış Ölçü: **{total_outer_len} mm**")
+        st.success(f"✅ Girilen Toplam Dış Ölçü: **{total_outer_len} mm**")
