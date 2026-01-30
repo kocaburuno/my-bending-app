@@ -10,24 +10,46 @@ st.markdown("""
     <style>
     .block-container {padding-top: 1rem; padding-bottom: 2rem;}
     .stButton>button {width: 100%; border-radius: 5px;}
-    /* Gereksiz kutu ve çerçeveleri kaldırdık, sadece başlıklar renkli */
+    
+    /* Başlıklar için temiz stil */
     .section-header {
         color: #0068C9;
         font-weight: bold;
-        font-size: 1.1em;
-        margin-top: 10px;
+        font-size: 1.05em;
+        margin-top: 15px;
         margin-bottom: 5px;
+        padding-bottom: 5px;
+        border-bottom: 1px solid #eee;
     }
     </style>
 """, unsafe_allow_html=True)
 
-# --- STATE YÖNETİMİ ---
+# --- STATE YÖNETİMİ (BAŞLANGIÇ) ---
 if "lengths" not in st.session_state:
     st.session_state.lengths = [100.0, 100.0] 
     st.session_state.angles = [90.0]
     st.session_state.dirs = ["YUKARI ⤴️"]
 
-# --- HESAPLAMA MOTORU (Aynı) ---
+# --- YARDIMCI FONKSİYON: PRESET YÜKLEME ---
+# Bu fonksiyon, hem listeleri hem de widget KEY'lerini günceller.
+# Böylece ekrandaki kutucuklar da yeni değerleri alır.
+def load_preset(new_lengths, new_angles, new_dirs):
+    st.session_state.lengths = new_lengths
+    st.session_state.angles = new_angles
+    st.session_state.dirs = new_dirs
+    
+    # Widget Key'lerini (Hafızayı) Manuel Güncelle
+    # Başlangıç kenarı (len_0)
+    if len(new_lengths) > 0:
+        st.session_state["len_0"] = new_lengths[0]
+        
+    # Ara adımlar
+    for i in range(len(new_angles)):
+        st.session_state[f"len_{i+1}"] = new_lengths[i+1]
+        st.session_state[f"ang_{i}"] = new_angles[i]
+        st.session_state[f"dir_{i}"] = new_dirs[i]
+
+# --- HESAPLAMA MOTORU ---
 def generate_solid_and_dimensions(lengths, angles, dirs, thickness, inner_radius):
     outer_radius = inner_radius + thickness
     
@@ -207,33 +229,29 @@ with col_input:
     # --- HAZIR BUTONLAR ---
     st.markdown("#### 🚀 Hızlı Başlangıç")
     b1, b2, b3, b4 = st.columns(4)
+    
     if b1.button("L-Tip"):
-        st.session_state.lengths = [100.0, 100.0]
-        st.session_state.angles = [90.0]
-        st.session_state.dirs = ["YUKARI ⤴️"]
+        load_preset([100.0, 100.0], [90.0], ["YUKARI ⤴️"])
         st.rerun()
+        
     if b2.button("U-Tip"):
-        st.session_state.lengths = [100.0, 100.0, 100.0]
-        st.session_state.angles = [90.0, 90.0]
-        st.session_state.dirs = ["YUKARI ⤴️", "YUKARI ⤴️"]
+        load_preset([100.0, 100.0, 100.0], [90.0, 90.0], ["YUKARI ⤴️", "YUKARI ⤴️"])
         st.rerun()
+        
     if b3.button("Z-Tip"):
-        st.session_state.lengths = [100.0, 80.0, 100.0]
-        st.session_state.angles = [90.0, 90.0]
-        st.session_state.dirs = ["YUKARI ⤴️", "AŞAĞI ⤵️"]
+        load_preset([100.0, 80.0, 100.0], [90.0, 90.0], ["YUKARI ⤴️", "AŞAĞI ⤵️"])
         st.rerun()
+        
     if b4.button("Temizle"):
-        st.session_state.lengths = [100.0, 100.0]
-        st.session_state.angles = [90.0]
-        st.session_state.dirs = ["YUKARI ⤴️"]
+        load_preset([100.0, 100.0], [90.0], ["YUKARI ⤴️"])
         st.rerun()
 
     st.divider()
 
-    # --- ÖLÇÜ GİRİŞİ (YENİ SADE DÜZEN) ---
+    # --- ÖLÇÜ GİRİŞİ (LİNEER AKIŞ) ---
     st.subheader("✏️ Ölçü Girişi")
     
-    # 1. BAŞLANGIÇ KENARI
+    # 1. BAŞLANGIÇ
     st.markdown('<div class="section-header">1. Başlangıç Kenarı</div>', unsafe_allow_html=True)
     st.session_state.lengths[0] = st.number_input(
         "L_start", value=float(st.session_state.lengths[0]), 
@@ -248,7 +266,7 @@ with col_input:
         # 1. Uzunluk
         st.caption("Kenar Uzunluğu (mm)")
         st.session_state.lengths[i+1] = st.number_input(
-            "L_next", value=float(st.session_state.lengths[i+1]), 
+            f"Len_{i+1}", value=float(st.session_state.lengths[i+1]), 
             min_value=1.0, key=f"len_{i+1}", label_visibility="collapsed"
         )
         
@@ -257,14 +275,14 @@ with col_input:
         with c_ang:
             st.caption("Açı (°)")
             st.session_state.angles[i] = st.number_input(
-                "Ang", value=float(st.session_state.angles[i]), 
+                f"Ang_{i}", value=float(st.session_state.angles[i]), 
                 min_value=1.0, max_value=180.0, key=f"ang_{i}", label_visibility="collapsed"
             )
         with c_dir:
             st.caption("Yön")
             curr_idx = 0 if st.session_state.dirs[i] == "YUKARI ⤴️" else 1
             st.session_state.dirs[i] = st.selectbox(
-                "Dir", ["YUKARI ⤴️", "AŞAĞI ⤵️"], index=curr_idx, key=f"dir_{i}", label_visibility="collapsed"
+                f"Dir_{i}", ["YUKARI ⤴️", "AŞAĞI ⤵️"], index=curr_idx, key=f"dir_{i}", label_visibility="collapsed"
             )
 
     # 3. BUTONLAR
