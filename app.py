@@ -3,22 +3,60 @@ import plotly.graph_objects as go
 import numpy as np
 import pandas as pd
 
-# --- SAYFA AYARLARI ---
-st.set_page_config(page_title="Basit Büküm Simülasyonu", layout="wide", page_icon="📐")
+# --- SAYFA AYARLARI (MOBİL UYUMLU) ---
+st.set_page_config(page_title="Büküm Simülasyonu", layout="wide", page_icon="📐", initial_sidebar_state="expanded")
 
+# --- CSS: ULTRA KOMPAKT VE MOBİL DOSTU ---
 st.markdown("""
     <style>
-    .block-container {padding-top: 1rem; padding-bottom: 2rem;}
-    .stButton>button {width: 100%; border-radius: 5px;}
+    /* 1. Sayfa Kenar Boşluklarını Sıfırla */
+    .block-container {
+        padding-top: 1rem !important;
+        padding-bottom: 1rem !important;
+        padding-left: 1rem !important;
+        padding-right: 1rem !important;
+    }
     
-    .section-header {
-        color: #0068C9;
+    /* 2. Sidebar (Sol Menü) Sıkılaştırma */
+    [data-testid="stSidebar"] .block-container {
+        padding-top: 1rem;
+    }
+    [data-testid="stSidebarUserContent"] {
+        padding-top: 0rem;
+    }
+    
+    /* 3. Widget'lar Arası Boşlukları Yok Et */
+    div[data-testid="column"] {
+        gap: 0.2rem !important; 
+    }
+    .stNumberInput, .stSelectbox {
+        margin-bottom: -15px !important; /* Alt boşluğu eksiye çekerek yapıştır */
+    }
+    
+    /* 4. Başlıkları Küçült ve Sıkıştır */
+    h4 {
+        margin-top: 0.5rem !important;
+        margin-bottom: 0.5rem !important;
+        font-size: 1rem !important;
+    }
+    .compact-header {
+        font-size: 0.85rem;
         font-weight: bold;
-        font-size: 1.05em;
-        margin-top: 15px;
-        margin-bottom: 5px;
-        padding-bottom: 5px;
-        border-bottom: 1px solid #eee;
+        color: #555;
+        margin-bottom: 0px;
+    }
+    
+    /* 5. Butonlar */
+    .stButton>button {
+        width: 100%;
+        border-radius: 4px;
+        height: 2.5rem;
+        font-size: 0.9rem;
+    }
+    
+    /* 6. Mobil İyileştirmesi: Grafik Alanı */
+    [data-testid="stPlotlyChart"] {
+        min-height: 400px;
     }
     </style>
 """, unsafe_allow_html=True)
@@ -154,11 +192,9 @@ def generate_solid_and_dimensions(lengths, angles, dirs, thickness, inner_radius
     
     return final_x, final_y, apex_x, apex_y, directions
 
-# --- ÖLÇÜLENDİRME (GÜNCELLENDİ) ---
+# --- ÖLÇÜLENDİRME ---
 def add_dims(fig, apex_x, apex_y, directions, lengths, angles):
-    # 1. İsteğe Bağlı Düzeltme: Ofset mesafesi artırıldı (Daha fazla boşluk)
     dim_offset = 50 
-    
     for i in range(len(lengths)):
         p1 = np.array([apex_x[i], apex_y[i]])
         p2 = np.array([apex_x[i+1], apex_y[i+1]])
@@ -178,29 +214,23 @@ def add_dims(fig, apex_x, apex_y, directions, lengths, angles):
         dim_p2 = p2 + normal * dim_offset * side
         mid_p = (dim_p1 + dim_p2) / 2
         
-        # Ok Çizgisi (Hover kapalı)
         fig.add_trace(go.Scatter(
             x=[dim_p1[0], dim_p2[0]], y=[dim_p1[1], dim_p2[1]],
             mode='lines+markers',
             marker=dict(symbol='arrow', size=8, angleref="previous", color='black'),
-            line=dict(color='black', width=1), 
-            hoverinfo='skip' # 1. İsteğe Bağlı Düzeltme: Hover kapalı
+            line=dict(color='black', width=1), hoverinfo='skip'
         ))
-        # Yazı
         fig.add_annotation(
             x=mid_p[0], y=mid_p[1], text=f"<b>{lengths[i]:.1f}</b>",
             showarrow=False, yshift=10*side, font=dict(color="#B22222", size=14),
             bgcolor="rgba(255,255,255,0.8)"
         )
-        # Uzatma Çizgileri (Hover kapalı)
         fig.add_trace(go.Scatter(
             x=[p1[0], dim_p1[0], None, p2[0], dim_p2[0]], 
             y=[p1[1], dim_p1[1], None, p2[1], dim_p2[1]],
-            mode='lines', line=dict(color='gray', width=0.5, dash='dot'), 
-            hoverinfo='skip' # 1. İsteğe Bağlı Düzeltme: Hover kapalı
+            mode='lines', line=dict(color='gray', width=0.5, dash='dot'), hoverinfo='skip'
         ))
 
-    # Açı Ölçüleri
     curr_abs_ang = 0
     for i in range(len(angles)):
         val = angles[i]
@@ -213,7 +243,6 @@ def add_dims(fig, apex_x, apex_y, directions, lengths, angles):
         
         bisector = curr_abs_ang + np.radians(dev_deg * d_val / 2) - (np.pi/2 * d_val)
         
-        # 1. İsteğe Bağlı Düzeltme: Açı yazı mesafesi artırıldı
         dist = 50
         txt_x = corner[0] + dist * np.cos(bisector)
         txt_y = corner[1] + dist * np.sin(bisector)
@@ -226,132 +255,108 @@ def add_dims(fig, apex_x, apex_y, directions, lengths, angles):
         curr_abs_ang += np.radians(dev_deg * d_val)
 
 # --- ANA ARAYÜZ ---
-st.title("📐 Kolay Büküm Simülasyonu")
-
-col_input, col_view = st.columns([1, 2.5])
-
-with col_input:
-    # --- 1. SAC VE KALIP AYARLARI ---
-    st.markdown("#### ⚙️ Sac ve Kalıp Ayarları")
+# Sidebar (Sol Menü) Mobil'de gizlenir, Desktop'ta solda durur.
+with st.sidebar:
+    st.title("🛠️ Kontrol Paneli")
+    
+    # 1. AYARLAR (Yan Yana)
+    st.markdown("#### Sac ve Kalıp")
     c_th, c_rad = st.columns(2)
-    th = c_th.number_input("Kalınlık (mm)", min_value=0.1, max_value=50.0, value=2.0, step=0.1)
-    rad = c_rad.number_input("Bıçak Radius (mm)", min_value=0.8, max_value=50.0, value=0.8, step=0.1)
+    th = c_th.number_input("Kalınlık", min_value=0.1, max_value=50.0, value=2.0, step=0.1)
+    rad = c_rad.number_input("R-Bıçak", min_value=0.8, max_value=50.0, value=0.8, step=0.1)
 
-    st.divider()
+    st.markdown("---")
 
-    # --- 2. HAZIR BUTONLAR ---
-    st.markdown("#### 🚀 Hızlı Başlangıç")
+    # 2. HIZLI İŞLEMLER
+    st.markdown("#### Şablonlar")
     b1, b2, b3, b4 = st.columns(4)
-    
-    if b1.button("L-Tip"):
-        load_preset([100.0, 100.0], [90.0], ["YUKARI ⤴️"])
-        st.rerun()
-        
-    if b2.button("U-Tip"):
-        load_preset([100.0, 100.0, 100.0], [90.0, 90.0], ["YUKARI ⤴️", "YUKARI ⤴️"])
-        st.rerun()
-        
-    if b3.button("Z-Tip"):
-        load_preset([100.0, 80.0, 100.0], [90.0, 90.0], ["YUKARI ⤴️", "AŞAĞI ⤵️"])
-        st.rerun()
-        
-    if b4.button("Temizle"):
-        load_preset([100.0, 100.0], [90.0], ["YUKARI ⤴️"])
-        st.rerun()
+    if b1.button("L"): load_preset([100.0, 100.0], [90.0], ["YUKARI ⤴️"]); st.rerun()
+    if b2.button("U"): load_preset([100.0, 100.0, 100.0], [90.0, 90.0], ["YUKARI ⤴️", "YUKARI ⤴️"]); st.rerun()
+    if b3.button("Z"): load_preset([100.0, 80.0, 100.0], [90.0, 90.0], ["YUKARI ⤴️", "AŞAĞI ⤵️"]); st.rerun()
+    if b4.button("X"): load_preset([100.0, 100.0], [90.0], ["YUKARI ⤴️"]); st.rerun()
 
-    st.divider()
+    st.markdown("---")
+    
+    # 3. GİRİŞLER (KOMPAKT)
+    st.markdown("#### Ölçü Girişi")
 
-    # --- 3. ÖLÇÜ GİRİŞİ ---
-    st.markdown("#### ✏️ Ölçü Girişi")
+    # Başlangıç
+    st.markdown('<p class="compact-header">1. Başlangıç Kenarı (mm)</p>', unsafe_allow_html=True)
+    st.session_state.lengths[0] = st.number_input("len_0", value=float(st.session_state.lengths[0]), min_value=1.0, step=0.1, label_visibility="collapsed")
     
-    # 1. BAŞLANGIÇ
-    st.markdown('<div class="section-header">1. Başlangıç Kenarı</div>', unsafe_allow_html=True)
-    st.session_state.lengths[0] = st.number_input(
-        "L_start", value=float(st.session_state.lengths[0]), 
-        min_value=1.0, step=0.1,
-        key="len_0", label_visibility="collapsed"
-    )
-    
-    # 2. BÜKÜM DÖNGÜSÜ
+    # Döngüsel Giriş (TEK SATIRDA 3 KUTU)
+    # Mobilde yer kazanmak için sütun oranlarını ayarlıyoruz
     for i in range(len(st.session_state.angles)):
-        st.markdown(f'<div class="section-header">{i+1}. Sonraki Kenar</div>', unsafe_allow_html=True)
+        st.markdown(f'<p class="compact-header" style="margin-top:10px;">{i+1}. Büküm ve Sonrası</p>', unsafe_allow_html=True)
         
-        # 1. Uzunluk
-        st.caption("Kenar Uzunluğu (mm)")
-        st.session_state.lengths[i+1] = st.number_input(
-            f"Len_{i+1}", value=float(st.session_state.lengths[i+1]), 
-            min_value=1.0, step=0.1,
-            key=f"len_{i+1}", label_visibility="collapsed"
-        )
+        # Grid yapısı: [ Uzunluk (40%) ] [ Açı (30%) ] [ Yön (30%) ]
+        c1, c2, c3 = st.columns([1.2, 0.9, 1.1])
         
-        # 2. Açı ve Yön
-        c_ang, c_dir = st.columns(2)
-        with c_ang:
-            st.caption("Açı (°)")
-            st.session_state.angles[i] = st.number_input(
-                f"Ang_{i}", value=float(st.session_state.angles[i]), 
-                min_value=1.0, max_value=180.0, 
-                key=f"ang_{i}", label_visibility="collapsed"
+        with c1:
+            st.session_state.lengths[i+1] = st.number_input(
+                f"L{i}", value=float(st.session_state.lengths[i+1]), min_value=1.0, step=0.1, 
+                key=f"len_{i+1}", label_visibility="collapsed", help="Sonraki Kenar"
             )
-        with c_dir:
-            st.caption("Yön")
+        with c2:
+            st.session_state.angles[i] = st.number_input(
+                f"A{i}", value=float(st.session_state.angles[i]), min_value=1.0, max_value=180.0, 
+                key=f"ang_{i}", label_visibility="collapsed", help="Açı"
+            )
+        with c3:
             curr_idx = 0 if st.session_state.dirs[i] == "YUKARI ⤴️" else 1
             st.session_state.dirs[i] = st.selectbox(
-                f"Dir_{i}", ["YUKARI ⤴️", "AŞAĞI ⤵️"], index=curr_idx, key=f"dir_{i}", label_visibility="collapsed"
+                f"D{i}", ["YUKARI ⤴️", "AŞAĞI ⤵️"], index=curr_idx, 
+                key=f"dir_{i}", label_visibility="collapsed", help="Yön"
             )
 
-    # 3. BUTONLAR
     st.markdown("---")
-    c_add, c_del = st.columns(2)
     
-    if c_add.button("➕ Adım Ekle"):
-        st.session_state.lengths.append(100.0) 
+    # 4. EKLE / SİL (Yan Yana)
+    c_add, c_del = st.columns(2)
+    if c_add.button("➕ EKLE"):
+        st.session_state.lengths.append(50.0) 
         st.session_state.angles.append(90.0)   
         st.session_state.dirs.append("YUKARI ⤴️")
         st.rerun()
-        
-    if c_del.button("🗑️ Geri Al"):
+    if c_del.button("🗑️ SİL"):
         if len(st.session_state.angles) > 0:
             st.session_state.lengths.pop()
             st.session_state.angles.pop()
             st.session_state.dirs.pop()
             st.rerun()
 
-with col_view:
-    # --- GRAFİK ÇİZİMİ ---
-    sx, sy, ax, ay, drs = generate_solid_and_dimensions(
-        st.session_state.lengths, 
-        st.session_state.angles, 
-        st.session_state.dirs, 
-        th, rad
-    )
-    
-    fig = go.Figure()
-    
-    # Ana Parça (Hover kapalı)
-    fig.add_trace(go.Scatter(
-        x=sx, y=sy, fill='toself', fillcolor='rgba(176, 196, 222, 0.5)',
-        line=dict(color='#4682B4', width=2), mode='lines',
-        hoverinfo='skip' # 1. İsteğe Bağlı Düzeltme: Hover kapalı
-    ))
-    
-    add_dims(fig, ax, ay, drs, st.session_state.lengths, st.session_state.angles)
-    
-    # Otomatik Zoom
-    all_x = sx + ax
-    all_y = sy + ay
-    if not all_x: all_x = [0, 100]
-    if not all_y: all_y = [0, 100]
-    
-    fig.update_layout(
-        height=700, dragmode='pan', showlegend=False,
-        hovermode=False, # 1. İsteğe Bağlı Düzeltme: Genel hover kapalı
-        xaxis=dict(showgrid=True, gridcolor='#f9f9f9', zeroline=False, visible=False, scaleanchor="y"),
-        yaxis=dict(showgrid=True, gridcolor='#f9f9f9', zeroline=False, visible=False),
-        plot_bgcolor="white", title=dict(text="Teknik Resim Önizleme", x=0.5),
-        margin=dict(l=20, r=20, t=40, b=20)
-    )
-    st.plotly_chart(fig, use_container_width=True)
-    
-    total_len = sum(st.session_state.lengths)
-    st.success(f"✅ Toplam Dış Ölçü: **{total_len:.1f} mm**")
+# --- ANA EKRAN (GRAFİK) ---
+# Sol menü kapalıyken burası tam ekran olur.
+sx, sy, ax, ay, drs = generate_solid_and_dimensions(
+    st.session_state.lengths, 
+    st.session_state.angles, 
+    st.session_state.dirs, 
+    th, rad
+)
+
+fig = go.Figure()
+
+fig.add_trace(go.Scatter(
+    x=sx, y=sy, fill='toself', fillcolor='rgba(70, 130, 180, 0.5)', # Daha profesyonel mavi
+    line=dict(color='#004a80', width=2), mode='lines',
+    hoverinfo='skip'
+))
+
+add_dims(fig, ax, ay, drs, st.session_state.lengths, st.session_state.angles)
+
+# Başlık ve Bilgi
+st.markdown("### 📐 Simülasyon Önizleme")
+total_len = sum(st.session_state.lengths)
+st.caption(f"Toplam Açınım (Kaba): {total_len:.1f} mm | Malzeme: {th}mm | Bıçak: R{rad}")
+
+fig.update_layout(
+    height=600, # Mobilde de iyi görünsün
+    dragmode='pan', 
+    showlegend=False,
+    hovermode=False,
+    xaxis=dict(showgrid=True, gridcolor='#f0f2f6', zeroline=False, visible=False, scaleanchor="y"),
+    yaxis=dict(showgrid=True, gridcolor='#f0f2f6', zeroline=False, visible=False),
+    plot_bgcolor="white",
+    margin=dict(l=10, r=10, t=10, b=10)
+)
+st.plotly_chart(fig, use_container_width=True)
