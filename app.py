@@ -11,186 +11,169 @@ st.markdown("""
     .block-container {padding-top: 1rem; padding-bottom: 2rem;}
     /* Tablo başlıklarını biraz daha belirgin yapalım */
     [data-testid="stDataFrameResizable"] th {
-        font-size: 1.1rem !important;
+        font-size: 1.0rem !important;
         color: #0068C9 !important;
     }
     </style>
 """, unsafe_allow_html=True)
 
-# --- GELİŞMİŞ GEOMETRİ MOTORU ---
-def calculate_precise_profile(df_steps, thickness, inner_radius):
+# --- GELİŞMİŞ GEOMETRİ MOTORU (EŞ ZAMANLI OFSET) ---
+def generate_solid_profile(df_steps, thickness, inner_radius):
     """
-    Dıştan dışa ölçüleri ve UP/DOWN yön bilgisini baz alarak profil çıkarır.
+    Üst ve Alt yüzeyleri eş zamanlı hesaplayarak kusursuz katı model oluşturur.
     """
     outer_radius = inner_radius + thickness
     
-    # Listeler
-    x_outer = [0]
-    y_outer = [0]
+    # Başlangıç Durumu (0,0) - Sacın Üst Yüzeyi Referans
+    # Sac başlangıçta sağa gidiyor (Açı 0).
+    # Normal vektörü (Kalınlık yönü) aşağıya bakıyor (-90 derece).
+    
+    # Koordinat Listeleri
+    top_x, top_y = [0], [0]
+    bot_x, bot_y = [0], [-thickness] # Alt yüzey kalınlık kadar aşağıda
     
     current_x = 0
     current_y = 0
-    current_angle = 0 # Radyan (Başlangıç 0 = Sağa doğru)
+    current_ang = 0 # Radyan (0 = Sağa)
     
-    # 1. ADIM: SETBACK (KÖŞE PAYI) HESAPLAMA
-    setbacks = [0] 
+    # 1. ADIM: SETBACK (DÜZELTME) HESABI
+    # Düz kısımların gerçek uzunluğunu bulmak için
+    setbacks = [0]
     angles_rad = []
-    directions = [] # 1: Yukarı, -1: Aşağı
+    directions = [] # 1: Yukarı (Sol), -1: Aşağı (Sağ)
     
     for i in range(len(df_steps)):
         row = df_steps.iloc[i]
         deg = row['Açı (°)']
-        direction_str = row['Yön']
+        d_str = row['Yön']
         
-        # Yönü sayısal değere çevir
-        if direction_str == "YUKARI ⤴️":
-            direction_val = 1
-        elif direction_str == "AŞAĞI ⤵️":
-            direction_val = -1
-        else:
-            direction_val = 1 # Varsayılan
+        dir_val = 1 if "YUKARI" in d_str else -1
         
         if deg == 0:
             sb = 0
-            rad_dev = 0
-            direction_val = 0 # Yön önemsiz
+            r_dev = 0
+            dir_val = 0
         else:
-            # Geometrik Kısaltma (Outer Setback)
-            rad_dev = np.radians(deg)
-            sb = outer_radius * np.tan(rad_dev / 2)
+            # Dıştan ölçü olduğu için Outer Radius (R+t) üzerinden Setback hesaplanır
+            r_dev = np.radians(deg)
+            sb = outer_radius * np.tan(r_dev / 2)
             
         setbacks.append(sb)
-        angles_rad.append(rad_dev)
-        directions.append(direction_val)
+        angles_rad.append(r_dev)
+        directions.append(dir_val)
         
-    setbacks.append(0) 
+    setbacks.append(0)
 
-    # 2. ADIM: DIŞ HATTI (OUTER PATH) ÇİZ
-    outer_path_x = [0]
-    outer_path_y = [0]
-    
-    curr_ang = 0 # Mutlak açı
-    
-    # Yay parametrelerini sakla
-    arc_centers = [] 
-    arc_params = [] 
-    
+    # 2. ADIM: PROFİLİ OLUŞTUR (İLERİ YÖNLÜ)
     for i in range(len(df_steps)):
         raw_len = df_steps.iloc[i]['Uzunluk (mm)']
         
-        # Düzeltilmiş Düz Uzunluk
-        sb_prev = setbacks[i]
-        sb_next = setbacks[i+1]
-        
-        flat_len = raw_len - sb_prev - sb_next
-        if flat_len < 0: flat_len = 0 
-        
-        # --- DÜZ ÇİZGİ ---
-        end_x = outer_path_x[-1] + flat_len * np.cos(curr_ang)
-        end_y = outer_path_y[-1] + flat_len * np.sin(curr_ang)
-        
-        outer_path_x.append(end_x)
-        outer_path_y.append(end_y)
-        
-        # Büküm yoksa devam et
-        if i >= len(angles_rad) or angles_rad[i] == 0:
-            arc_centers.append(None)
-            arc_params.append(None)
-            continue
-            
-        # --- YAY (ARC) ---
-        dev = angles_rad[i]
-        direction = directions[i] 
-        
-        # Merkez Hesabı (+90 veya -90 derece dik)
-        perp_ang = curr_ang + (np.pi/2 * direction)
-        cx = end_x + outer_radius * np.cos(perp_ang)
-        cy = end_y + outer_radius * np.sin(perp_ang)
-        
-        arc_centers.append((cx, cy))
-        
-        # Yay Açıları
-        start_a = perp_ang - np.pi 
-        end_a = start_a + (dev * direction)
-        
-        arc_params.append((start_a, end_a, direction))
-        
-        # Yay Noktaları
-        steps = 15
-        theta = np.linspace(start_a, end_a, steps)
-        
-        arc_x = cx + outer_radius * np.cos(theta)
-        arc_y = cy + outer_radius * np.sin(theta)
-        
-        outer_path_x.extend(arc_x)
-        outer_path_y.extend(arc_y)
-        
-        # Açıyı güncelle
-        curr_ang += dev * direction
-
-    # 3. ADIM: İÇ HATTI (INNER PATH) OLUŞTUR
-    inner_path_x = []
-    inner_path_y = []
-    
-    final_ang = curr_ang
-    seg_count = len(df_steps)
-    
-    for i in range(seg_count - 1, -1, -1):
-        # YAYI İŞLE (Varsa)
-        if i < len(arc_centers) and arc_centers[i] is not None:
-            cx, cy = arc_centers[i]
-            start_a, end_a, direction = arc_params[i]
-            
-            # İç yay (Ters yön)
-            steps = 15
-            theta = np.linspace(end_a, start_a, steps)
-            
-            arc_ix = cx + inner_radius * np.cos(theta)
-            arc_iy = cy + inner_radius * np.sin(theta)
-            
-            inner_path_x.extend(arc_ix)
-            inner_path_y.extend(arc_iy)
-            
-            # Açı geri alma
-            dev = angles_rad[i]
-            dir_ = directions[i]
-            final_ang -= dev * dir_
-            
-        # DÜZ ÇİZGİYİ İŞLE
-        raw_len = df_steps.iloc[i]['Uzunluk (mm)']
-        sb_prev = setbacks[i]
-        sb_next = setbacks[i+1]
-        flat_len = raw_len - sb_prev - sb_next
+        # Düz Kısmın Uzunluğu
+        flat_len = raw_len - setbacks[i] - setbacks[i+1]
         if flat_len < 0: flat_len = 0
         
-        # Ters yöne git
-        rev_ang = final_ang + np.pi
+        # --- DÜZ ÇİZGİ EKLE ---
+        # Mevcut açıda ilerle
+        dx = flat_len * np.cos(current_ang)
+        dy = flat_len * np.sin(current_ang)
         
-        # Başlangıç noktası kontrolü
-        if not inner_path_x:
-            nx = np.sin(final_ang)
-            ny = -np.cos(final_ang)
-            lx = outer_path_x[-1]
-            ly = outer_path_y[-1]
-            start_ix = lx + nx * thickness
-            start_iy = ly + ny * thickness
-            inner_path_x.append(start_ix)
-            inner_path_y.append(start_iy)
+        # Yeni merkez (Üst yüzey üzerindeki nokta)
+        new_x = current_x + dx
+        new_y = current_y + dy
+        
+        # Normal Vektörü (Sağa gidişin "Aşağısı")
+        # Vektör (cos a, sin a) -> Dik Vektör (sin a, -cos a)
+        # Bu vektör üst yüzeyden alt yüzeye gidiş yönüdür.
+        nx = np.sin(current_ang)
+        ny = -np.cos(current_ang)
+        
+        # Noktaları Ekle
+        top_x.append(new_x)
+        top_y.append(new_y)
+        
+        # Alt nokta = Üst Nokta + Normal * Kalınlık
+        bot_x.append(new_x + nx * thickness)
+        bot_y.append(new_y + ny * thickness)
+        
+        # Konumu Güncelle
+        current_x = new_x
+        current_y = new_y
+        
+        # --- BÜKÜM (YAY) EKLE ---
+        # Eğer büküm varsa
+        if i < len(angles_rad) and angles_rad[i] > 0:
+            dev = angles_rad[i]     # Dönüş miktarı (radyan)
+            direction = directions[i] # 1 veya -1
             
-        curr_ix = inner_path_x[-1]
-        curr_iy = inner_path_y[-1]
-        
-        end_ix = curr_ix + flat_len * np.cos(rev_ang)
-        end_iy = curr_iy + flat_len * np.sin(rev_ang)
-        
-        inner_path_x.append(end_ix)
-        inner_path_y.append(end_iy)
+            # Büküm Merkezini ve Radiusları Belirle
+            # Normal vektörü (nx, ny) şu an "Aşağı" bakıyor (Materyal içine doğru)
+            
+            if direction == 1: # YUKARI (Sola Dönüş)
+                # Sola dönerken:
+                # Üst Yüzey = İÇ RADIUS (r)
+                # Alt Yüzey = DIŞ RADIUS (r+t)
+                # Merkez = Üst yüzeyden "Yukarı/Sola" doğru (Normalin tersi yönünde) r kadar
+                
+                # Normal (nx, ny) aşağı bakıyordu. Tersi (-nx, -ny) yukarı bakar.
+                cx = current_x - nx * inner_radius
+                cy = current_y - ny * inner_radius
+                
+                radius_top = inner_radius
+                radius_bot = outer_radius
+                
+                # Açı Başlangıcı: Merkezden Uca giden vektörün açısı
+                # Uç = Merkez + Vektör -> Vektör = Uç - Merkez = Normal * r -> Açı = Normal açısı
+                # Normal açısı = current_ang - 90 (-pi/2)
+                start_angle = current_ang - np.pi/2
+                end_angle = start_angle + dev # Pozitif (Sola) dönüş
+                
+            else: # AŞAĞI (Sağa Dönüş)
+                # Sağa dönerken:
+                # Üst Yüzey = DIŞ RADIUS (r+t)
+                # Alt Yüzey = İÇ RADIUS (r)
+                # Merkez = Üst yüzeyden "Aşağı/Sağa" doğru (Normal yönünde) r+t kadar
+                
+                cx = current_x + nx * outer_radius
+                cy = current_y + ny * outer_radius
+                
+                radius_top = outer_radius
+                radius_bot = inner_radius
+                
+                start_angle = current_ang + np.pi/2 # Normalin tersi? Hayır, merkezden uca bakış.
+                # Uç = Merkez - Normal*(r+t). Vektör = -Normal.
+                # Normal açısı -90. -Normal açısı +90.
+                start_angle = current_ang + np.pi/2 
+                end_angle = start_angle - dev # Negatif (Sağa) dönüş
 
-    # 4. POLİGON BİRLEŞTİRME
-    full_x = outer_path_x + inner_path_x + [outer_path_x[0]]
-    full_y = outer_path_y + inner_path_y + [outer_path_y[0]]
+            # Yay Noktalarını Oluştur
+            steps = 20
+            theta = np.linspace(start_angle, end_angle, steps)
+            
+            # Üst Yay
+            arc_tx = cx + radius_top * np.cos(theta)
+            arc_ty = cy + radius_top * np.sin(theta)
+            
+            # Alt Yay
+            arc_bx = cx + radius_bot * np.cos(theta)
+            arc_by = cy + radius_bot * np.sin(theta)
+            
+            # Listeye Ekle
+            top_x.extend(arc_tx)
+            top_y.extend(arc_ty)
+            bot_x.extend(arc_bx)
+            bot_y.extend(arc_by)
+            
+            # Konumu ve Açıyı Güncelle
+            current_x = arc_tx[-1]
+            current_y = arc_ty[-1]
+            current_ang += dev * direction
+
+    # 3. ADIM: POLİGON KAPATMA
+    # Üst noktalar + Ters çevrilmiş Alt noktalar
+    final_x = top_x + bot_x[::-1] + [top_x[0]]
+    final_y = top_y + bot_y[::-1] + [top_y[0]]
     
-    return full_x, full_y
+    return final_x, final_y
 
 # --- ARAYÜZ ---
 st.title("⚡ Pro Büküm Simülasyonu")
@@ -207,16 +190,14 @@ with col_left:
     
     st.subheader("2. Büküm Planı")
     
-    # Yardımcı Bilgi Kutusu
+    # Yardımcı Bilgi
     with st.expander("ℹ️ Tablo Nasıl Kullanılır?", expanded=True):
         st.markdown("""
-        Her satır **bir kenarı ve sonundaki bükümü** temsil eder:
-        1.  **📏 Uzunluk:** Düz gidecek mesafeyi yazın.
-        2.  **📐 Açı:** O kenarın sonunda yapılacak büküm açısı (örn: 90°).
-        3.  **🔄 Yön:** Bükümün yukarı mı aşağı mı olacağını seçin.
+        Her satır **bir kenarı ve sonundaki bükümü** temsil eder.
+        * **📏 Kenar Boyu:** Bükümden büküme Dış Ölçü.
+        * **📐 Açı:** Sonraki kenara geçiş açısı.
         """)
     
-    # Varsayılan Veriler
     if "data" not in st.session_state:
         st.session_state.data = [
             {"Uzunluk (mm)": 100, "Açı (°)": 90, "Yön": "YUKARI ⤴️"}, 
@@ -225,38 +206,22 @@ with col_left:
 
     df_input = pd.DataFrame(st.session_state.data)
     
-    # TABLO DÜZENİ
     edited_df = st.data_editor(
         df_input,
         num_rows="dynamic",
-        use_container_width=True, # Genişliği tam kullan
+        use_container_width=True,
         column_config={
             "Uzunluk (mm)": st.column_config.NumberColumn(
-                "📏 Kenar Boyu", # Başlık Değişti
-                min_value=1, 
-                required=True,
-                format="%d mm",
-                help="Bükümden büküme olan dış mesafe"
-            ),
+                "📏 Kenar Boyu", min_value=1, required=True, format="%d mm"),
             "Açı (°)": st.column_config.NumberColumn(
-                "📐 Büküm Açısı", # Başlık Değişti
-                min_value=0, 
-                max_value=180,
-                required=True,
-                format="%d°"
-            ),
+                "📐 Büküm Açısı", min_value=0, max_value=180, required=True, format="%d°"),
             "Yön": st.column_config.SelectboxColumn(
-                "🔄 Büküm Yönü", # Başlık Değişti
-                options=["YUKARI ⤴️", "AŞAĞI ⤵️"],
-                required=True,
-                help="Bükümün ne tarafa yapılacağı"
-            )
+                "🔄 Büküm Yönü", options=["YUKARI ⤴️", "AŞAĞI ⤵️"], required=True)
         },
         hide_index=True
     )
     
-    # Sıfırlama Butonu
-    if st.button("🔄 Standart Değerlere Sıfırla"):
+    if st.button("🔄 Sıfırla"):
         st.session_state.data = [
             {"Uzunluk (mm)": 100, "Açı (°)": 90, "Yön": "YUKARI ⤴️"}, 
             {"Uzunluk (mm)": 100, "Açı (°)": 90, "Yön": "YUKARI ⤴️"}, 
@@ -266,18 +231,19 @@ with col_left:
 with col_right:
     if not edited_df.empty:
         # Grafik Hesaplama
-        fx, fy = calculate_precise_profile(edited_df, th, rad)
+        fx, fy = generate_solid_profile(edited_df, th, rad)
         
         fig = go.Figure()
         
-        # Tek Parça Poligon
+        # Tek Parça Solid Poligon
         fig.add_trace(go.Scatter(
             x=fx, y=fy,
             fill='toself', 
             fillcolor='#4a86e8',
             line=dict(color='black', width=2),
             mode='lines',
-            name='Sac Kesiti'
+            name='Sac Kesiti',
+            hoverinfo='skip'
         ))
         
         # Eksen Ayarları
@@ -296,6 +262,5 @@ with col_right:
         
         st.plotly_chart(fig, use_container_width=True)
         
-        # Ölçü Bilgisi
         total_outer_len = edited_df["Uzunluk (mm)"].sum()
         st.success(f"✅ Girilen Toplam Dış Ölçü: **{total_outer_len} mm**")
