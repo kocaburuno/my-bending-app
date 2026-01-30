@@ -10,22 +10,13 @@ st.markdown("""
     <style>
     .block-container {padding-top: 1rem; padding-bottom: 2rem;}
     .stButton>button {width: 100%; border-radius: 5px;}
-    
-    /* Girdi Kutuları için daha temiz görünüm */
-    .input-box {
-        background-color: #ffffff;
-        padding: 15px;
-        border-radius: 8px;
-        border: 1px solid #e0e0e0;
-        margin-bottom: 10px;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
-    }
-    .bend-badge {
-        font-weight: bold;
+    /* Gereksiz kutu ve çerçeveleri kaldırdık, sadece başlıklar renkli */
+    .section-header {
         color: #0068C9;
-        font-size: 0.9em;
+        font-weight: bold;
+        font-size: 1.1em;
+        margin-top: 10px;
         margin-bottom: 5px;
-        display: block;
     }
     </style>
 """, unsafe_allow_html=True)
@@ -36,7 +27,7 @@ if "lengths" not in st.session_state:
     st.session_state.angles = [90.0]
     st.session_state.dirs = ["YUKARI ⤴️"]
 
-# --- HESAPLAMA MOTORU ---
+# --- HESAPLAMA MOTORU (Aynı) ---
 def generate_solid_and_dimensions(lengths, angles, dirs, thickness, inner_radius):
     outer_radius = inner_radius + thickness
     
@@ -243,46 +234,41 @@ with col_input:
     st.subheader("✏️ Ölçü Girişi")
     
     # 1. BAŞLANGIÇ KENARI
-    with st.container():
-        st.markdown(f'<div class="bend-badge">1. Başlangıç Kenarı</div>', unsafe_allow_html=True)
-        st.session_state.lengths[0] = st.number_input(
-            "Uzunluk (mm)", value=float(st.session_state.lengths[0]), 
-            min_value=1.0, key="len_0", label_visibility="collapsed"
-        )
+    st.markdown('<div class="section-header">1. Başlangıç Kenarı</div>', unsafe_allow_html=True)
+    st.session_state.lengths[0] = st.number_input(
+        "L_start", value=float(st.session_state.lengths[0]), 
+        min_value=1.0, key="len_0", label_visibility="collapsed"
+    )
     
     # 2. BÜKÜM DÖNGÜSÜ
     # İstenen sıralama: Sonraki Uzunluk -> Açı -> Yön
     for i in range(len(st.session_state.angles)):
-        st.markdown(f'<div class="input-box">', unsafe_allow_html=True)
+        st.markdown(f'<div class="section-header">{i+1}. Sonraki Kenar</div>', unsafe_allow_html=True)
         
-        # Etiket
-        st.markdown(f'<div class="bend-badge">{i+1}. Büküm</div>', unsafe_allow_html=True)
-        
-        # 1. Sonraki Kenar Uzunluğu (Dış Ölçü)
-        st.markdown("📏 Sonraki Kenar (mm)")
+        # 1. Uzunluk
+        st.caption("Kenar Uzunluğu (mm)")
         st.session_state.lengths[i+1] = st.number_input(
             "L_next", value=float(st.session_state.lengths[i+1]), 
             min_value=1.0, key=f"len_{i+1}", label_visibility="collapsed"
         )
         
-        # 2. Açı ve Yön (Yan Yana)
+        # 2. Açı ve Yön
         c_ang, c_dir = st.columns(2)
         with c_ang:
-            st.markdown("📐 Açı (°)")
+            st.caption("Açı (°)")
             st.session_state.angles[i] = st.number_input(
                 "Ang", value=float(st.session_state.angles[i]), 
                 min_value=1.0, max_value=180.0, key=f"ang_{i}", label_visibility="collapsed"
             )
         with c_dir:
-            st.markdown("🔄 Yön")
+            st.caption("Yön")
             curr_idx = 0 if st.session_state.dirs[i] == "YUKARI ⤴️" else 1
             st.session_state.dirs[i] = st.selectbox(
                 "Dir", ["YUKARI ⤴️", "AŞAĞI ⤵️"], index=curr_idx, key=f"dir_{i}", label_visibility="collapsed"
             )
-            
-        st.markdown('</div>', unsafe_allow_html=True) # Kutu Kapanış
 
     # 3. BUTONLAR
+    st.markdown("---")
     c_add, c_del = st.columns(2)
     
     if c_add.button("➕ Adım Ekle"):
@@ -322,13 +308,12 @@ with col_view:
     
     add_dims(fig, ax, ay, drs, st.session_state.lengths, st.session_state.angles)
     
-    # Otomatik Zoom (Parçayı ortala)
+    # Otomatik Zoom
     all_x = sx + ax
     all_y = sy + ay
     if not all_x: all_x = [0, 100]
     if not all_y: all_y = [0, 100]
     
-    margin = 50
     fig.update_layout(
         height=700, dragmode='pan', showlegend=False,
         xaxis=dict(showgrid=True, gridcolor='#f9f9f9', zeroline=False, visible=False, scaleanchor="y"),
