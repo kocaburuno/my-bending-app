@@ -6,26 +6,26 @@ import pandas as pd
 # --- SAYFA AYARLARI ---
 st.set_page_config(page_title="Büküm Simülasyonu", layout="wide", page_icon="📐", initial_sidebar_state="expanded")
 
-# --- CSS: GÜVENLİ KOMPAKT TASARIM ---
+# --- CSS: DÜZELTİLMİŞ YERLEŞİM (HEADER ÇAKIŞMASI GİDERİLDİ) ---
 st.markdown("""
     <style>
-    /* 1. Sayfa Kenar Boşlukları */
+    /* 1. Sayfa Kenar Boşlukları (Üst boşluk artırıldı) */
     .block-container {
-        padding-top: 0.5rem !important;
+        padding-top: 3.5rem !important; /* Başlığın menü altında kalmaması için artırıldı */
         padding-bottom: 1rem !important;
         padding-left: 0.5rem !important;
         padding-right: 0.5rem !important;
     }
     
-    /* 2. Sidebar Sıkılaştırma (Güvenli Boşluk) */
+    /* 2. Sidebar Sıkılaştırma */
     [data-testid="stSidebar"] .block-container {
-        padding-top: 1rem;
+        padding-top: 2rem;
         padding-bottom: 2rem;
     }
     
-    /* 3. Input Kutuları (Hafif nefes payı ile çakışmayı önle) */
+    /* 3. Input Kutuları (Hafif nefes payı) */
     .stNumberInput, .stSelectbox, .stButton {
-        margin-bottom: 3px !important; /* 0px yerine 3px güvenli aralık */
+        margin-bottom: 3px !important;
         margin-top: 0px !important;
     }
     
@@ -179,9 +179,8 @@ def generate_solid_and_dimensions(lengths, angles, dirs, thickness, inner_radius
     
     return final_x, final_y, apex_x, apex_y, directions
 
-# --- ÖLÇÜLENDİRME (DAR & TEMİZ) ---
+# --- ÖLÇÜLENDİRME ---
 def add_dims(fig, apex_x, apex_y, directions, lengths, angles):
-    # DAR TASARIM: Ofseti 50'den 30'a düşürdük (Parçaya yakın)
     dim_offset = 30 
     
     for i in range(len(lengths)):
@@ -203,7 +202,6 @@ def add_dims(fig, apex_x, apex_y, directions, lengths, angles):
         dim_p2 = p2 + normal * dim_offset * side
         mid_p = (dim_p1 + dim_p2) / 2
         
-        # Akıllı Ok Boyutu: Parça kısaysa (30mm altı) okları küçült
         arrow_size = 8 if L > 30 else 5
         
         # Ok Çizgisi
@@ -215,13 +213,13 @@ def add_dims(fig, apex_x, apex_y, directions, lengths, angles):
             hoverinfo='skip'
         ))
         
-        # Yazı (SOLID BACKGROUND - Üste binmeyi engeller)
+        # Yazı
         fig.add_annotation(
             x=mid_p[0], y=mid_p[1], text=f"<b>{lengths[i]:.1f}</b>",
             showarrow=False, yshift=8*side, 
             font=dict(color="#B22222", size=13),
-            bgcolor="white", # Tam Beyaz Arka Plan
-            opacity=1.0      # Alttaki çizgiyi gizle
+            bgcolor="white", 
+            opacity=1.0      
         )
         
         # Uzatma Çizgileri
@@ -245,7 +243,6 @@ def add_dims(fig, apex_x, apex_y, directions, lengths, angles):
         
         bisector = curr_abs_ang + np.radians(dev_deg * d_val / 2) - (np.pi/2 * d_val)
         
-        # Açı yazısını da makul bir mesafeye koy (40 birim)
         dist = 40
         txt_x = corner[0] + dist * np.cos(bisector)
         txt_y = corner[1] + dist * np.sin(bisector)
@@ -263,7 +260,6 @@ def add_dims(fig, apex_x, apex_y, directions, lengths, angles):
 with st.sidebar:
     st.markdown("### ⚙️ Sac ve Kalıp Ayarları")
     
-    # AYARLAR (Yan Yana)
     c1, c2 = st.columns(2)
     with c1:
         st.markdown('<p class="compact-label">Kalınlık (mm)</p>', unsafe_allow_html=True)
@@ -274,7 +270,6 @@ with st.sidebar:
 
     st.markdown("---")
     
-    # ŞABLONLAR
     st.markdown('<p class="compact-label" style="font-size:1em;">🚀 Hızlı Şablonlar</p>', unsafe_allow_html=True)
     b1, b2, b3, b4 = st.columns(4)
     if b1.button("L"): load_preset([100.0, 100.0], [90.0], ["UP"]); st.rerun()
@@ -284,20 +279,15 @@ with st.sidebar:
 
     st.markdown("---")
 
-    # ÖLÇÜ GİRİŞİ
     st.markdown('<p class="compact-label" style="font-size:1em;">✏️ Ölçü Girişi</p>', unsafe_allow_html=True)
 
-    # 1. Başlangıç
     st.markdown('<p class="compact-label" style="color:#0068C9;">1. Başlangıç Kenarı (mm)</p>', unsafe_allow_html=True)
     st.session_state.lengths[0] = st.number_input("len_0", value=float(st.session_state.lengths[0]), min_value=1.0, step=0.1, label_visibility="collapsed")
 
-    # 2. Döngü
     for i in range(len(st.session_state.angles)):
         st.markdown(f'<p class="compact-label" style="color:#0068C9; margin-top:8px;">{i+1}. Büküm ve Sonrası</p>', unsafe_allow_html=True)
         
-        # Grid: [Uzunluk] [Açı] [Yön]
         col_len, col_ang, col_dir = st.columns([1.3, 1.0, 1.2])
-        
         with col_len:
             st.markdown('<p class="compact-label">Kenar</p>', unsafe_allow_html=True)
             st.session_state.lengths[i+1] = st.number_input(
@@ -320,7 +310,6 @@ with st.sidebar:
 
     st.markdown("---")
     
-    # BUTONLAR
     c_add, c_del = st.columns(2)
     if c_add.button("➕ EKLE"):
         st.session_state.lengths.append(50.0) 
