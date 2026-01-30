@@ -4,76 +4,72 @@ import numpy as np
 import pandas as pd
 
 # --- SAYFA AYARLARI ---
-st.set_page_config(page_title="CAD Büküm Simülasyonu", layout="wide", page_icon="📐")
+st.set_page_config(page_title="Basit Büküm Simülasyonu", layout="wide", page_icon="📐")
 
 st.markdown("""
     <style>
     .block-container {padding-top: 1rem; padding-bottom: 2rem;}
-    /* Tablo başlıklarını netleştirelim */
-    [data-testid="stDataFrameResizable"] th {
-        color: #0068C9 !important;
-        font-weight: bold !important;
+    .stButton>button {width: 100%; border-radius: 5px;}
+    .step-card {
+        background-color: #f8f9fa;
+        padding: 15px;
+        border-radius: 8px;
+        margin-bottom: 10px;
+        border-left: 5px solid #0068C9;
+    }
+    .end-card {
+        background-color: #e8f4f8;
+        padding: 15px;
+        border-radius: 8px;
+        border-left: 5px solid #28a745;
     }
     </style>
 """, unsafe_allow_html=True)
 
-# --- MATEMATİK VE GEOMETRİ MOTORU ---
-def generate_solid_and_dimensions(df_steps, thickness, inner_radius):
-    """
-    Son satırın açısını dikkate almadan (None/NaN veya 0) geometri üretir.
-    """
+# --- STATE YÖNETİMİ (VERİLERİ BURADA TUTUYORUZ) ---
+if "lengths" not in st.session_state:
+    # Varsayılan L Parça: 100mm -> 90 derece -> 100mm
+    st.session_state.lengths = [100.0, 100.0] 
+    st.session_state.angles = [90.0]
+    st.session_state.dirs = ["YUKARI ⤴️"]
+
+# --- HESAPLAMA MOTORU (AYNI GÜÇLÜ MOTOR) ---
+def generate_solid_and_dimensions(lengths, angles, dirs, thickness, inner_radius):
     outer_radius = inner_radius + thickness
+    
+    # Verileri birleştir (DataFrame benzeri yapıya çevir)
+    # Motorumuz döngüsel çalıştığı için listeleri eşitleyelim
+    # Lengths her zaman Angles + 1 kadardır.
     
     apex_x = [0]
     apex_y = [0]
     
     curr_x, curr_y = 0, 0
-    curr_ang = 0 # 0 = Sağ (Başlangıç)
+    curr_ang = 0 
     
     deviation_angles = [] 
     directions = []
-    input_angles = []
-    processed_lengths = []
     
-    num_steps = len(df_steps)
-    
-    # --- 1. VERİ ANALİZİ ---
-    for i in range(num_steps):
-        row = df_steps.iloc[i]
+    # 1. TEORİK HAT HESABI
+    for i in range(len(lengths)):
+        length = lengths[i]
         
-        # Verileri güvenli çekme (NaN/None kontrolü)
-        length = row['Uzunluk']
-        user_angle = row['Açı']
-        d_str = row['Yön']
-        
-        # Eğer NaN veya None ise 0 kabul et veya varsayılan değer ata
-        if pd.isna(length): length = 0
-        
-        # Son satır kontrolü veya boş açı kontrolü
-        is_last_row = (i == num_steps - 1)
-        
-        if is_last_row or pd.isna(user_angle) or user_angle == 0:
-            # Büküm yok (Düz devam veya bitiş)
-            user_angle = 180 # İç açı mantığında 180 düzdür
-            dev_deg = 0
-            dir_val = 0
-        else:
-            # Normal büküm
-            if d_str == "YUKARI ⤴️":
-                dir_val = 1
-            elif d_str == "AŞAĞI ⤵️":
-                dir_val = -1
-            else:
-                dir_val = 1 # Varsayılan
+        # Büküm Var mı?
+        if i < len(angles):
+            user_angle = angles[i]
+            d_str = dirs[i]
+            dir_val = 1 if "YUKARI" in d_str else -1
             
-            # İç açıdan sapma açısına çevir
             if user_angle == 180:
                 dev_deg = 0
                 dir_val = 0
             else:
                 dev_deg = 180 - user_angle
-
-        # Teorik hat (Apex noktaları) ilerlemesi
+        else:
+            # Son parça (Büküm yok)
+            dev_deg = 0
+            dir_val = 0
+        
         dx = length * np.cos(curr_ang)
         dy = length * np.sin(curr_ang)
         
@@ -83,47 +79,41 @@ def generate_solid_and_dimensions(df_steps, thickness, inner_radius):
         apex_x.append(curr_x)
         apex_y.append(curr_y)
         
-        # Açıyı güncelle (Sonraki segmentin yönü)
         if dev_deg != 0:
             dev_rad = np.radians(dev_deg)
             curr_ang += dev_rad * dir_val
             
         deviation_angles.append(dev_deg)
-        input_angles.append(user_angle)
         directions.append(dir_val)
-        processed_lengths.append(length)
 
-    # --- 2. KATI MODEL (SOLID) ---
+    # 2. KATI MODEL
     top_x, top_y = [0], [0]
     bot_x, bot_y = [0], [-thickness]
     
     curr_pos_x, curr_pos_y = 0, 0
     curr_dir_ang = 0
     
-    # Setback (Kısaltma) Hesabı
+    # Setback Hesabı
     setbacks = [0]
     deviation_radians = []
-    
-    for i in range(num_steps):
-        dev_deg = deviation_angles[i]
-        if dev_deg == 0:
+    for deg in deviation_angles:
+        if deg == 0:
             sb = 0
             rad_val = 0
         else:
-            rad_val = np.radians(dev_deg)
+            rad_val = np.radians(deg)
             sb = outer_radius * np.tan(rad_val / 2)
         setbacks.append(sb)
         deviation_radians.append(rad_val)
     setbacks.append(0)
     
-    # Çizim Döngüsü
-    for i in range(num_steps):
-        raw_len = processed_lengths[i]
+    # Çizim
+    for i in range(len(lengths)):
+        raw_len = lengths[i]
         flat_len = raw_len - setbacks[i] - setbacks[i+1]
-        
         if flat_len < 0: flat_len = 0
         
-        # Düz Çizgi
+        # Düz
         dx = flat_len * np.cos(curr_dir_ang)
         dy = flat_len * np.sin(curr_dir_ang)
         
@@ -140,8 +130,8 @@ def generate_solid_and_dimensions(df_steps, thickness, inner_radius):
         
         curr_pos_x, curr_pos_y = new_x, new_y
         
-        # Yay (Arc) - Sadece gerçek bükümlerde
-        if deviation_angles[i] > 0:
+        # Yay (Sadece büküm varsa)
+        if i < len(angles) and deviation_angles[i] > 0:
             dev = deviation_radians[i]
             d_val = directions[i]
             
@@ -169,16 +159,16 @@ def generate_solid_and_dimensions(df_steps, thickness, inner_radius):
             curr_pos_y = top_y[-1]
             curr_dir_ang += dev * d_val
 
-    final_solid_x = top_x + bot_x[::-1] + [top_x[0]]
-    final_solid_y = top_y + bot_y[::-1] + [top_y[0]]
+    final_x = top_x + bot_x[::-1] + [top_x[0]]
+    final_y = top_y + bot_y[::-1] + [top_y[0]]
     
-    return final_solid_x, final_solid_y, apex_x, apex_y, directions, input_angles, processed_lengths
+    return final_x, final_y, apex_x, apex_y, directions
 
 # --- ÖLÇÜLENDİRME ---
-def add_dimensions_to_fig(fig, apex_x, apex_y, directions, lengths, input_angles):
-    dim_offset = 35 
+def add_dims(fig, apex_x, apex_y, directions, lengths, angles):
+    dim_offset = 35
     
-    # 1. Uzunluklar
+    # Uzunluklar
     for i in range(len(lengths)):
         p1 = np.array([apex_x[i], apex_y[i]])
         p2 = np.array([apex_x[i+1], apex_y[i+1]])
@@ -188,189 +178,178 @@ def add_dimensions_to_fig(fig, apex_x, apex_y, directions, lengths, input_angles
         if L == 0: continue
         unit = vec / L
         
-        # Normal yönü (Yazının geleceği taraf)
+        # Yön bulma
         curr_dir = directions[i] if i < len(directions) else 0
         if curr_dir == 0: curr_dir = directions[i-1] if i > 0 else 1
-
+            
         normal = np.array([-unit[1], unit[0]])
         side = -1 if curr_dir == 1 else 1
-        if i == 0: side = -1 
+        if i == 0: side = -1
         
         dim_p1 = p1 + normal * dim_offset * side
         dim_p2 = p2 + normal * dim_offset * side
         mid_p = (dim_p1 + dim_p2) / 2
         
-        # Ok Çizgisi
         fig.add_trace(go.Scatter(
             x=[dim_p1[0], dim_p2[0]], y=[dim_p1[1], dim_p2[1]],
             mode='lines+markers',
             marker=dict(symbol='arrow', size=8, angleref="previous", color='black'),
-            line=dict(color='black', width=1),
-            hoverinfo='skip'
+            line=dict(color='black', width=1), hoverinfo='skip'
         ))
-        # Yazı
         fig.add_annotation(
-            x=mid_p[0], y=mid_p[1],
-            text=f"<b>{int(lengths[i])}</b>",
-            showarrow=False,
-            yshift=10 * side,
-            font=dict(color="#B22222", size=14),
+            x=mid_p[0], y=mid_p[1], text=f"<b>{int(lengths[i])}</b>",
+            showarrow=False, yshift=10*side, font=dict(color="#B22222", size=14),
             bgcolor="rgba(255,255,255,0.8)"
         )
-        # Uzatma Çizgileri
         fig.add_trace(go.Scatter(
             x=[p1[0], dim_p1[0], None, p2[0], dim_p2[0]], 
             y=[p1[1], dim_p1[1], None, p2[1], dim_p2[1]],
-            mode='lines',
-            line=dict(color='gray', width=0.5, dash='dot'),
-            hoverinfo='skip'
+            mode='lines', line=dict(color='gray', width=0.5, dash='dot'), hoverinfo='skip'
         ))
 
-    # 2. Açı Gösterimi
-    current_angle_abs = 0 
-    
-    for i in range(len(input_angles) - 1): # Sonuncuya bakma
-        angle_val = input_angles[i]
+    # Açılar
+    curr_abs_ang = 0
+    for i in range(len(angles)):
+        val = angles[i]
+        if val == 180: continue
         
-        if angle_val == 180 or angle_val == 0 or pd.isna(angle_val):
-            pass
-        else:
-            idx = i + 1 
-            corner = np.array([apex_x[idx], apex_y[idx]])
-            d_val = directions[i]
-            dev_deg = 180 - angle_val
+        idx = i + 1
+        corner = np.array([apex_x[idx], apex_y[idx]])
+        d_val = directions[i]
+        dev_deg = 180 - val
+        
+        bisector = curr_abs_ang + np.radians(dev_deg * d_val / 2) - (np.pi/2 * d_val)
+        txt_x = corner[0] + 40 * np.cos(bisector)
+        txt_y = corner[1] + 40 * np.sin(bisector)
+        
+        fig.add_annotation(
+            x=txt_x, y=txt_y, ax=corner[0], ay=corner[1],
+            text=f"<b>{int(val)}°</b>", showarrow=True, arrowhead=0,
+            font=dict(color="blue", size=12), bgcolor="rgba(255,255,255,0.7)"
+        )
+        curr_abs_ang += np.radians(dev_deg * d_val)
+
+# --- ANA ARAYÜZ ---
+st.title("📐 Kolay Büküm Simülasyonu")
+
+col_input, col_view = st.columns([1, 2.5])
+
+with col_input:
+    # --- HAZIR BUTONLAR ---
+    st.markdown("#### 🚀 Hızlı Başlangıç")
+    b1, b2, b3, b4 = st.columns(4)
+    if b1.button("L-Parça"):
+        st.session_state.lengths = [100.0, 100.0]
+        st.session_state.angles = [90.0]
+        st.session_state.dirs = ["YUKARI ⤴️"]
+        st.rerun()
+    if b2.button("U-Parça"):
+        st.session_state.lengths = [100.0, 100.0, 100.0]
+        st.session_state.angles = [90.0, 90.0]
+        st.session_state.dirs = ["YUKARI ⤴️", "YUKARI ⤴️"]
+        st.rerun()
+    if b3.button("Z-Parça"):
+        st.session_state.lengths = [100.0, 80.0, 100.0]
+        st.session_state.angles = [90.0, 90.0]
+        st.session_state.dirs = ["YUKARI ⤴️", "AŞAĞI ⤵️"]
+        st.rerun()
+    if b4.button("Sıfırla"):
+        st.session_state.lengths = [100.0, 100.0]
+        st.session_state.angles = [90.0]
+        st.session_state.dirs = ["YUKARI ⤴️"]
+        st.rerun()
+
+    st.divider()
+
+    # --- BASİT GİRİŞ ALANI (STEP-BY-STEP) ---
+    st.subheader("✏️ Ölçü Girişi")
+    
+    # 1. BAŞLANGIÇ KENARI
+    with st.container():
+        st.markdown(f"**1. Başlangıç Kenarı**")
+        st.session_state.lengths[0] = st.number_input(
+            "Uzunluk (mm)", value=float(st.session_state.lengths[0]), 
+            min_value=1.0, key="len_0", label_visibility="collapsed"
+        )
+    
+    # 2. ARA ADIMLAR (Büküm + Kenar)
+    for i in range(len(st.session_state.angles)):
+        st.markdown(f"⬇️")
+        with st.container():
+            st.markdown(f"""<div class="step-card"><b>{i+1}. Büküm ve Sonrası</b></div>""", unsafe_allow_html=True)
             
-            bisector_angle = current_angle_abs + np.radians(dev_deg * d_val / 2) - (np.pi/2 * d_val)
-            
-            dist = 40
-            txt_x = corner[0] + dist * np.cos(bisector_angle)
-            txt_y = corner[1] + dist * np.sin(bisector_angle)
-            
-            fig.add_annotation(
-                x=txt_x, y=txt_y,
-                ax=corner[0], ay=corner[1],
-                text=f"<b>{int(angle_val)}°</b>",
-                showarrow=True,
-                arrowhead=0, arrowwidth=1, arrowcolor='blue',
-                font=dict(color="blue", size=12),
-                bgcolor="rgba(255,255,255,0.7)"
+            c_ang, c_dir = st.columns(2)
+            st.session_state.angles[i] = c_ang.number_input(
+                "Açı (°)", value=float(st.session_state.angles[i]), 
+                min_value=1.0, max_value=180.0, key=f"ang_{i}"
             )
             
-            current_angle_abs += np.radians(dev_deg * d_val)
+            curr_idx = 0 if st.session_state.dirs[i] == "YUKARI ⤴️" else 1
+            new_dir = c_dir.selectbox(
+                "Yön", ["YUKARI ⤴️", "AŞAĞI ⤵️"], index=curr_idx, key=f"dir_{i}"
+            )
+            st.session_state.dirs[i] = new_dir
+            
+            st.markdown("👇 *Sonraki Kenar Uzunluğu (mm)*")
+            st.session_state.lengths[i+1] = st.number_input(
+                "Uzunluk", value=float(st.session_state.lengths[i+1]), 
+                min_value=1.0, key=f"len_{i+1}", label_visibility="collapsed"
+            )
 
-# --- ARAYÜZ ---
-st.title("📐 CAD Büküm Simülasyonu")
-
-col_table, col_graph = st.columns([1, 2.5])
-
-with col_table:
-    st.subheader("📝 Büküm Adımları")
+    # 3. EKLE / ÇIKAR BUTONLARI
+    st.markdown("---")
+    c_add, c_del = st.columns(2)
     
-    # Buton Grubu (Hazır Stiller)
-    st.markdown("##### 🚀 Hazır Stiller")
-    b1, b2, b3, b4 = st.columns(4)
-    
-    if b1.button("L-Parça"):
-        st.session_state.data = [
-             {"Uzunluk": 100, "Açı": 90, "Yön": "YUKARI ⤴️"}, 
-             {"Uzunluk": 100, "Açı": None, "Yön": None}, # Son satır boş
-        ]
+    if c_add.button("➕ Büküm Ekle"):
+        st.session_state.lengths.append(100.0) # Varsayılan yeni kenar
+        st.session_state.angles.append(90.0)   # Varsayılan yeni açı
+        st.session_state.dirs.append("YUKARI ⤴️")
         st.rerun()
         
-    if b2.button("U-Parça"):
-        st.session_state.data = [
-             {"Uzunluk": 100, "Açı": 90, "Yön": "YUKARI ⤴️"}, 
-             {"Uzunluk": 100, "Açı": 90, "Yön": "YUKARI ⤴️"}, 
-             {"Uzunluk": 100, "Açı": None, "Yön": None}, 
-        ]
-        st.rerun()
+    if c_del.button("🗑️ Son Adımı Sil"):
+        if len(st.session_state.angles) > 0:
+            st.session_state.lengths.pop()
+            st.session_state.angles.pop()
+            st.session_state.dirs.pop()
+            st.rerun()
 
-    if b3.button("Z-Parça"):
-        st.session_state.data = [
-             {"Uzunluk": 100, "Açı": 90, "Yön": "YUKARI ⤴️"}, 
-             {"Uzunluk": 80,  "Açı": 90, "Yön": "AŞAĞI ⤵️"}, 
-             {"Uzunluk": 100, "Açı": None, "Yön": None}, 
-        ]
-        st.rerun()
+    # --- AYARLAR ---
+    st.markdown("---")
+    with st.expander("⚙️ Kalıp Ayarları"):
+        th = st.number_input("Kalınlık", 0.5, 20.0, 2.0)
+        rad = st.number_input("Radius", 0.5, 20.0, 1.0)
 
-    if b4.button("Kombine"):
-        st.session_state.data = [
-             {"Uzunluk": 100, "Açı": 90, "Yön": "YUKARI ⤴️"}, 
-             {"Uzunluk": 50,  "Açı": 45, "Yön": "YUKARI ⤴️"}, # Keskin
-             {"Uzunluk": 80,  "Açı": 135, "Yön": "AŞAĞI ⤵️"}, # Geniş
-             {"Uzunluk": 60,  "Açı": None, "Yön": None}, 
-        ]
-        st.rerun()
-    
-    # Varsayılan Veri
-    if "data" not in st.session_state:
-        st.session_state.data = [
-            {"Uzunluk": 150, "Açı": 90, "Yön": "YUKARI ⤴️"}, 
-            {"Uzunluk": 100, "Açı": None, "Yön": None}, 
-        ]
-
-    df_input = pd.DataFrame(st.session_state.data)
-    
-    # Gelişmiş Tablo
-    edited_df = st.data_editor(
-        df_input,
-        num_rows="dynamic",
-        use_container_width=True,
-        column_config={
-            "Uzunluk": st.column_config.NumberColumn(
-                "📏 Kenar Boyu (mm)", 
-                min_value=1, required=True, format="%d"),
-            "Açı": st.column_config.NumberColumn(
-                "📐 Sonraki Açı (°)", # Başlık Değişti: Kullanıcıya 'Sonraki' olduğu belirtiliyor
-                min_value=1, max_value=180, required=False, format="%d",
-                help="Bitiş kenarı için boş bırakın."),
-            "Yön": st.column_config.SelectboxColumn(
-                "🔄 Sonraki Yön",
-                options=["YUKARI ⤴️", "AŞAĞI ⤵️"], required=False)
-        },
-        hide_index=True
+with col_view:
+    # --- GRAFİK ÇİZİMİ ---
+    sx, sy, ax, ay, drs = generate_solid_and_dimensions(
+        st.session_state.lengths, 
+        st.session_state.angles, 
+        st.session_state.dirs, 
+        th, rad
     )
     
-    st.info("💡 İpucu: Son satır parçanın bitiş kuyruğudur. Açısını **boş bırakın**.")
+    fig = go.Figure()
     
-    st.divider()
-    c_set1, c_set2 = st.columns(2)
-    th = c_set1.number_input("Sac Kalınlığı (T)", 0.5, 20.0, 2.0)
-    rad = c_set2.number_input("İç Radius (R)", 0.5, 20.0, 1.0)
-
-with col_graph:
-    if not edited_df.empty:
-        solid_x, solid_y, apex_x, apex_y, dirs, input_angs, final_lens = generate_solid_and_dimensions(edited_df, th, rad)
-        
-        fig = go.Figure()
-        
-        # 1. Parça Çizimi
-        fig.add_trace(go.Scatter(
-            x=solid_x, y=solid_y,
-            fill='toself', 
-            fillcolor='rgba(176, 196, 222, 0.5)', 
-            line=dict(color='#4682B4', width=2),
-            mode='lines',
-            name='Parça'
-        ))
-        
-        # 2. Ölçülendirme
-        add_dimensions_to_fig(fig, apex_x, apex_y, dirs, final_lens, input_angs)
-        
-        # Eksen ve Görünüm
-        all_x = solid_x + apex_x
-        all_y = solid_y + apex_y
-        min_x, max_x = min(all_x), max(all_x)
-        min_y, max_y = min(all_y), max(all_y)
-        
-        fig.update_layout(
-            height=700,
-            dragmode='pan',
-            showlegend=False,
-            xaxis=dict(showgrid=True, gridcolor='#f9f9f9', zeroline=True, scaleanchor="y", scaleratio=1, visible=False),
-            yaxis=dict(showgrid=True, gridcolor='#f9f9f9', zeroline=True, visible=False),
-            plot_bgcolor="white",
-            title=dict(text="Teknik Resim Önizleme", x=0.5)
-        )
-        
-        st.plotly_chart(fig, use_container_width=True)
+    fig.add_trace(go.Scatter(
+        x=sx, y=sy, fill='toself', fillcolor='rgba(176, 196, 222, 0.5)',
+        line=dict(color='#4682B4', width=2), mode='lines'
+    ))
+    
+    add_dims(fig, ax, ay, drs, st.session_state.lengths, st.session_state.angles)
+    
+    all_x = sx + ax
+    all_y = sy + ay
+    if not all_x: all_x = [0, 100]
+    if not all_y: all_y = [0, 100]
+    
+    fig.update_layout(
+        height=700, dragmode='pan', showlegend=False,
+        xaxis=dict(showgrid=True, gridcolor='#f9f9f9', zeroline=False, visible=False, scaleanchor="y"),
+        yaxis=dict(showgrid=True, gridcolor='#f9f9f9', zeroline=False, visible=False),
+        plot_bgcolor="white", title=dict(text="Teknik Resim Önizleme", x=0.5),
+        margin=dict(l=20, r=20, t=40, b=20)
+    )
+    st.plotly_chart(fig, use_container_width=True)
+    
+    total_len = sum(st.session_state.lengths)
+    st.success(f"✅ Toplam Dış Ölçü: **{total_len:.0f} mm**")
