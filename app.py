@@ -11,7 +11,6 @@ st.markdown("""
     .block-container {padding-top: 1rem; padding-bottom: 2rem;}
     .stButton>button {width: 100%; border-radius: 5px;}
     
-    /* Başlıklar için temiz stil */
     .section-header {
         color: #0068C9;
         font-weight: bold;
@@ -24,26 +23,21 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# --- STATE YÖNETİMİ (BAŞLANGIÇ) ---
+# --- STATE YÖNETİMİ ---
 if "lengths" not in st.session_state:
     st.session_state.lengths = [100.0, 100.0] 
     st.session_state.angles = [90.0]
     st.session_state.dirs = ["YUKARI ⤴️"]
 
-# --- YARDIMCI FONKSİYON: PRESET YÜKLEME ---
-# Bu fonksiyon, hem listeleri hem de widget KEY'lerini günceller.
-# Böylece ekrandaki kutucuklar da yeni değerleri alır.
+# --- PRESET YÜKLEME ---
 def load_preset(new_lengths, new_angles, new_dirs):
     st.session_state.lengths = new_lengths
     st.session_state.angles = new_angles
     st.session_state.dirs = new_dirs
     
-    # Widget Key'lerini (Hafızayı) Manuel Güncelle
-    # Başlangıç kenarı (len_0)
     if len(new_lengths) > 0:
         st.session_state["len_0"] = new_lengths[0]
         
-    # Ara adımlar
     for i in range(len(new_angles)):
         st.session_state[f"len_{i+1}"] = new_lengths[i+1]
         st.session_state[f"ang_{i}"] = new_angles[i]
@@ -226,7 +220,15 @@ st.title("📐 Kolay Büküm Simülasyonu")
 col_input, col_view = st.columns([1, 2.5])
 
 with col_input:
-    # --- HAZIR BUTONLAR ---
+    # --- 1. SAC VE KALIP AYARLARI (EN ÜSTTE) ---
+    st.markdown("#### ⚙️ Sac ve Kalıp Ayarları")
+    c_th, c_rad = st.columns(2)
+    th = c_th.number_input("Kalınlık (mm)", 0.5, 20.0, 2.0)
+    rad = c_rad.number_input("İç Radius (mm)", 0.5, 20.0, 1.0)
+
+    st.divider()
+
+    # --- 2. HAZIR BUTONLAR ---
     st.markdown("#### 🚀 Hızlı Başlangıç")
     b1, b2, b3, b4 = st.columns(4)
     
@@ -248,8 +250,8 @@ with col_input:
 
     st.divider()
 
-    # --- ÖLÇÜ GİRİŞİ (LİNEER AKIŞ) ---
-    st.subheader("✏️ Ölçü Girişi")
+    # --- 3. ÖLÇÜ GİRİŞİ ---
+    st.markdown("#### ✏️ Ölçü Girişi")
     
     # 1. BAŞLANGIÇ
     st.markdown('<div class="section-header">1. Başlangıç Kenarı</div>', unsafe_allow_html=True)
@@ -259,7 +261,6 @@ with col_input:
     )
     
     # 2. BÜKÜM DÖNGÜSÜ
-    # İstenen sıralama: Sonraki Uzunluk -> Açı -> Yön
     for i in range(len(st.session_state.angles)):
         st.markdown(f'<div class="section-header">{i+1}. Sonraki Kenar</div>', unsafe_allow_html=True)
         
@@ -301,12 +302,6 @@ with col_input:
             st.session_state.angles.pop()
             st.session_state.dirs.pop()
             st.rerun()
-
-    # --- AYARLAR ---
-    st.markdown("---")
-    with st.expander("⚙️ Kalıp Ayarları"):
-        th = st.number_input("Kalınlık", 0.5, 20.0, 2.0)
-        rad = st.number_input("Radius", 0.5, 20.0, 1.0)
 
 with col_view:
     # --- GRAFİK ÇİZİMİ ---
