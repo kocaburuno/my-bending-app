@@ -185,41 +185,72 @@ def generate_solid_and_dimensions(lengths, angles, dirs, thickness, inner_radius
 
 # --- ÖLÇÜLENDİRME ---
 def add_dims(fig, apex_x, apex_y, directions, lengths, angles):
-    dim_offset = 30 # Parçaya yakın
+    # Radikal ve Kesin Çözüm: Ölçülendirmeyi 'Göreceli Kenar' mantığıyla sıfırdan kuruyoruz.
+    # Her bükümden sonra koordinat sistemi döndüğü için, her kenarın kendi yerel dış tarafını 
+    # kümülatif açı takibiyle bulmalıyız.
+    
+    dim_offset = 60 # Parçadan uzak tutalım ki çakışmasın
+    curr_ang = 0 # Sacın o anki akış açısı (radyan)
+    
     for i in range(len(lengths)):
         p1 = np.array([apex_x[i], apex_y[i]])
         p2 = np.array([apex_x[i+1], apex_y[i+1]])
+        mid_p = (p1 + p2) / 2
+        
+        # Kenar vektörü ve birim normali
         vec = p2 - p1
-        if np.linalg.norm(vec) == 0: continue
-        unit = vec / np.linalg.norm(vec)
+        dist = np.linalg.norm(vec)
+        if dist < 0.1: continue
+        unit = vec / dist
         
-        curr_dir = directions[i] if i < len(directions) else 0
-        if curr_dir == 0: curr_dir = directions[i-1] if i > 0 else 1
-        normal = np.array([-unit[1], unit[0]])
-        side = -1 if curr_dir == 1 else 1
-        if i == 0: side = -1
+        # Kenarın 'Dış' tarafını tayin etme (En kritik nokta burası)
+        # Saat yönünün tersine normal: (-unit[1], unit[0])
+        # Saat yönüne normal: (unit[1], -unit[0])
         
-        dim_p1 = p1 + normal * dim_offset * side
-        dim_p2 = p2 + normal * dim_offset * side
-        mid_p = (dim_p1 + dim_p2) / 2
+        if i == 0:
+            # İlk kenar sağa doğru gidiyor. Dış tarafı aşağı (-y) verelim.
+            normal = np.array([0, -1])
+        else:
+            # Önceki bükümlerin toplam sapmasına göre 'dış' tarafı belirle.
+            # Eğer toplam sapma açısı (curr_ang) sağa dönüşleri (+) veya sola dönüşleri (-) içeriyorsa
+            # buna göre normali döndürmeliyiz.
+            # Basitleştirilmiş: Kenara dik olan vektörü her zaman parça merkezinden uzağa itecek bir side seçmeliyiz.
+            # Ancak Z formu gibi durumlarda 'içe binme' riskini önlemek için büküm yönü belirleyicidir.
+            prev_dir = directions[i-1] # 1: UP, -1: DOWN
+            
+            # Kenar vektörünü 90 derece döndür
+            # Eğer büküm UP ise, sac yukarı dönmüştür, dış taraf alt/dış taraftır.
+            # Büküm yönüne göre normali seç:
+            raw_normal = np.array([-unit[1], unit[0]]) # Sola dik
+            if prev_dir == 1: # UP büküm yapıldı
+                normal = -raw_normal # Dış taraf sağ/alt olur
+            else: # DOWN büküm yapıldı
+                normal = raw_normal # Dış taraf sol/üst olur
+
+        # Ölçü çizgisini oluştur
+        dim_p1 = p1 + normal * dim_offset
+        dim_p2 = p2 + normal * dim_offset
+        text_p = mid_p + normal * (dim_offset + 15)
         
-        # Parça küçükse okları küçült
-        arrow_size = 8 if lengths[i] > 30 else 5
-        
+        # Uzatma çizgileri
         fig.add_trace(go.Scatter(
-            x=[dim_p1[0], dim_p2[0]], y=[dim_p1[1], dim_p2[1]], mode='lines+markers',
-            marker=dict(symbol='arrow', size=arrow_size, angleref="previous", color='black'),
-            line=dict(color='black', width=1), hoverinfo='skip'
+            x=[p1[0], dim_p1[0], None, p2[0], dim_p2[0]], 
+            y=[p1[1], dim_p1[1], None, p2[1], dim_p2[1]],
+            mode='lines', line=dict(color='rgba(150,150,150,0.4)', width=1, dash='dot'), showlegend=False
         ))
+        
+        # Ölçü çizgisi (Tek parça, oklu)
+        fig.add_trace(go.Scatter(
+            x=[dim_p1[0], dim_p2[0]], y=[dim_p1[1], dim_p2[1]], 
+            mode='lines+markers', marker=dict(symbol='arrow', size=10, angleref="previous"),
+            line=dict(color='#2c3e50', width=1.5), showlegend=False
+        ))
+        
+        # Ölçü metni
         fig.add_annotation(
-            x=mid_p[0], y=mid_p[1], text=f"<b>{lengths[i]:.1f}</b>",
-            showarrow=False, yshift=8*side, font=dict(color="#B22222", size=13),
-            bgcolor="white", opacity=1.0 # Arka plan beyaz, çizgi görünmez
+            x=text_p[0], y=text_p[1], text=f"<b>{lengths[i]:.1f}</b>",
+            showarrow=False, font=dict(color="#B22222", size=13), bgcolor="white", opacity=0.9
         )
-        fig.add_trace(go.Scatter(
-            x=[p1[0], dim_p1[0], None, p2[0], dim_p2[0]], y=[p1[1], dim_p1[1], None, p2[1], dim_p2[1]],
-            mode='lines', line=dict(color='gray', width=0.5, dash='dot'), hoverinfo='skip'
-        ))
 
     curr_abs_ang = 0
     for i in range(len(angles)):
@@ -312,27 +343,30 @@ with tab1:
     add_dims(fig, ax, ay, drs, st.session_state.lengths, st.session_state.angles)
 
     fig.update_layout(
-        height=600, dragmode='pan', showlegend=False, hovermode=False,
-        xaxis=dict(showgrid=True, gridcolor='#f4f4f4', zeroline=False, visible=False, scaleanchor="y"),
-        yaxis=dict(showgrid=True, gridcolor='#f4f4f4', zeroline=False, visible=False),
-        plot_bgcolor="white", margin=dict(l=10, r=10, t=10, b=10)
+        height=600, 
+        dragmode=False, # Hareket ettirilemez yapıldı
+        showlegend=False, 
+        hovermode=False,
+        xaxis=dict(
+            showgrid=True, 
+            gridcolor='#f4f4f4', 
+            zeroline=False, 
+            visible=False, 
+            scaleanchor="y",
+            fixedrange=True # Zoom ve Pan engellendi
+        ),
+        yaxis=dict(
+            showgrid=True, 
+            gridcolor='#f4f4f4', 
+            zeroline=False, 
+            visible=False,
+            fixedrange=True # Zoom ve Pan engellendi
+        ),
+        plot_bgcolor="white", 
+        margin=dict(l=10, r=10, t=10, b=10)
     )
-
-    st.markdown("### 📐 Büküm Simülasyonu")
-
-    # Sonuç Kartı
-    st.markdown(f"""
-    <div class="result-card">
-        <div class="result-title">TOPLAM SAC AÇINIMI (LAZER KESİM ÖLÇÜSÜ)</div>
-        <div class="result-value">{flat_len:.2f} mm</div>
-        <div class="result-sub">
-            Formül: (Dış Ölçüler Toplamı) - (Büküm Sayısı x 2 x Kalınlık)<br>
-            (Toplam Dış Ölçü: {total_outer:.1f} mm | Toplam Kayıp: -{total_outer - flat_len:.2f} mm)
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
-
-    st.plotly_chart(fig, use_container_width=True)
+    # config streamlit plotly_chart içinde verilmeli, layout içinde değil
+    st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
 
 with tab2:
     st.markdown("### 🎬 Operatör Büküm Adımları")
@@ -402,15 +436,17 @@ with tab2:
                     fig_anim.add_trace(go.Scatter(x=die_x, y=die_y, fill='toself', fillcolor='rgba(100, 100, 100, 0.8)', line=dict(color='black', width=2), name='Kalıp'))
 
                 fig_anim.update_layout(
-                    height=600, showlegend=False,
-                    xaxis=dict(visible=False, scaleanchor="y"),
-                    yaxis=dict(visible=False),
+                    height=600, 
+                    dragmode=False, # Hareket ettirilemez yapıldı
+                    showlegend=False,
+                    xaxis=dict(visible=False, scaleanchor="y", fixedrange=True),
+                    yaxis=dict(visible=False, fixedrange=True),
                     plot_bgcolor="white", margin=dict(l=10, r=10, t=10, b=10),
                     title=f"Adım {s}: " + (f"{st.session_state.angles[s-1]}° Bükümü" if s > 0 else "Hazırlık")
                 )
                 
                 with placeholder.container():
-                    st.plotly_chart(fig_anim, use_container_width=True)
+                    st.plotly_chart(fig_anim, use_container_width=True, config={'displayModeBar': False})
                     if s > 0:
                         st.info(f"💡 Operatör Notu: {st.session_state.angles[s-1]}° {st.session_state.dirs[s-1]} bükümünü gerçekleştirin.")
                     else:
@@ -457,11 +493,13 @@ with tab2:
                 fig_anim.add_trace(go.Scatter(x=[bx-30, bx-15, bx, bx+15, bx+30], y=[by-40, by-40, by-10, by-40, by-40], fill='toself', fillcolor='rgba(100, 100, 100, 0.8)', line=dict(color='black', width=2)))
 
             fig_anim.update_layout(
-                height=600, showlegend=False,
-                xaxis=dict(visible=False, scaleanchor="y"),
-                yaxis=dict(visible=False),
+                height=600, 
+                dragmode=False, # Hareket ettirilemez yapıldı
+                showlegend=False,
+                xaxis=dict(visible=False, scaleanchor="y", fixedrange=True),
+                yaxis=dict(visible=False, fixedrange=True),
                 plot_bgcolor="white", margin=dict(l=10, r=10, t=10, b=10)
             )
-            st.plotly_chart(fig_anim, use_container_width=True)
+            st.plotly_chart(fig_anim, use_container_width=True, config={'displayModeBar': False})
 
 
