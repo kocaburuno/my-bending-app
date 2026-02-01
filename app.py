@@ -32,6 +32,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # --- 2. HAFIZA (STATE) YÖNETİMİ ---
+# Veri tutarlılığı için tek bir dictionary kullanıyoruz
 if "bending_data" not in st.session_state:
     st.session_state.bending_data = {
         "lengths": [100.0, 100.0],
@@ -43,7 +44,7 @@ def load_preset(l, a, d):
     st.session_state.bending_data = {"lengths": l, "angles": a, "dirs": d}
     st.rerun()
 
-# --- 3. HESAPLAMA MOTORU (AÇINIM) ---
+# --- 3. HESAPLAMA MOTORU ---
 def calculate_flat_len(lengths, angles, thickness):
     total_outer = sum(lengths)
     # Basit Kural: 90 derecede T kadar düş, diğerlerinde orantıla
@@ -51,7 +52,7 @@ def calculate_flat_len(lengths, angles, thickness):
     loss = sum(deductions)
     return total_outer - loss, total_outer
 
-# --- 4. GEOMETRİ VE KATI MODEL MOTORU ---
+# --- 4. GEOMETRİ VE KATI MODEL MOTORU (FULL VERSİYON) ---
 def generate_solid_geometry(lengths, angles, dirs, thickness, inner_radius):
     outer_radius = inner_radius + thickness
     
@@ -86,8 +87,8 @@ def generate_solid_geometry(lengths, angles, dirs, thickness, inner_radius):
         directions.append(dir_val)
 
     # Katı Model (Polygon) Oluşturma
-    # Sacı kalınlığı kadar offsetleyerek çiziyoruz (Y ekseninde yukarı kaldır)
-    curr_pos_x, curr_pos_y = 0, thickness 
+    # Sacı kalınlığı kadar offsetleyerek çiziyoruz
+    curr_pos_x, curr_pos_y = 0, thickness # Başlangıç Y'si thickness kadar yukarıda
     curr_dir_ang = 0
     
     top_x, top_y = [0], [thickness]
@@ -161,7 +162,6 @@ def add_smart_dims(fig, px, py, lengths):
     dim_offset = 60 # Parçadan uzaklık
     
     for i in range(len(lengths)):
-        # Parça segmentinin başlangıç ve bitiş noktaları (Apex'ten alıyoruz)
         p1 = np.array([px[i], py[i]])
         p2 = np.array([px[i+1], py[i+1]])
         
@@ -171,7 +171,6 @@ def add_smart_dims(fig, px, py, lengths):
         u = vec / L
         
         # SAĞ EL KURALI: Gidiş yönünün sağına dik vektör (u_y, -u_x)
-        # Bu, çizgi nereye dönerse dönsün her zaman "dış" tarafı bulur.
         normal = np.array([u[1], -u[0]])
         
         d1 = p1 + normal * dim_offset
@@ -211,8 +210,11 @@ with st.sidebar:
 
     st.divider()
     st.markdown('<span class="compact-label">1. Başlangıç Kenarı (mm)</span>', unsafe_allow_html=True)
+    
+    # HATA FIX: Key'ler artık loop index'ine göre değil, veriye göre unique.
+    # Yine de en güvenli yöntem index tabanlı unique string üretmek.
     st.session_state.bending_data["lengths"][0] = st.number_input(
-        "L0", value=float(st.session_state.bending_data["lengths"][0]), step=0.1, label_visibility="collapsed"
+        "L0", value=float(st.session_state.bending_data["lengths"][0]), step=0.1, label_visibility="collapsed", key="input_l0"
     )
 
     for i in range(len(st.session_state.bending_data["angles"])):
@@ -270,7 +272,7 @@ with tab1:
         x=sx, y=sy, fill='toself', fillcolor='rgba(70, 130, 180, 0.4)',
         line=dict(color='#004a80', width=2), mode='lines', hoverinfo='skip'
     ))
-    # Ölçülendirme (Sağ El Kuralı ile düzeltilmiş)
+    # Ölçülendirme
     add_smart_dims(fig, ax, ay, cur_l)
     
     # Açı Etiketleri
@@ -305,7 +307,7 @@ with tab2:
             placeholder = st.empty()
             # Adım adım animasyon döngüsü
             for s in range(len(cur_a) + 1):
-                # Anlık geometriyi hesapla (O ana kadarki bükümler yapılmış, gerisi düz)
+                # Anlık geometriyi hesapla
                 temp_a = [180.0] * len(cur_a)
                 for k in range(s): temp_a[k] = cur_a[k]
                 
@@ -318,19 +320,16 @@ with tab2:
                     line=dict(color='#004a80', width=2)
                 ))
                 
-                # Bıçak Gösterimi (Aktif büküm noktasında)
+                # Bıçak Gösterimi
                 if s > 0:
                     bx, by = tax[s], tay[s] # Büküm noktası
-                    # Basit bir "V" kalıp işareti
                     fig_anim.add_trace(go.Scatter(
                         x=[bx], y=[by], mode='markers', 
                         marker=dict(size=15, color='red', symbol='x-thin', line=dict(width=2, color='red'))
                     ))
                 
-                # Zoom ayarını sabitle (Titremeyi önler)
                 fig_anim.update_layout(
-                    height=500, 
-                    xaxis=dict(visible=False, scaleanchor="y", range=[min(sx)-50, max(sx)+50]),
+                    height=500, xaxis=dict(visible=False, scaleanchor="y", range=[min(sx)-50, max(sx)+50]),
                     yaxis=dict(visible=False, range=[min(sy)-50, max(sy)+50]),
                     title=f"Adım {s}: {cur_a[s-1]}° ({cur_d[s-1]})" if s > 0 else "Hazırlık: Düz Sac Yerleşimi",
                     plot_bgcolor="white"
