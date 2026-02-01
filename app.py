@@ -32,7 +32,6 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # --- 2. HAFIZA (STATE) YÖNETİMİ ---
-# Veri tutarlılığı için tek bir dictionary kullanıyoruz
 if "bending_data" not in st.session_state:
     st.session_state.bending_data = {
         "lengths": [100.0, 100.0],
@@ -44,7 +43,7 @@ def load_preset(l, a, d):
     st.session_state.bending_data = {"lengths": l, "angles": a, "dirs": d}
     st.rerun()
 
-# --- 3. HESAPLAMA MOTORU ---
+# --- 3. HESAPLAMA MOTORU (AÇINIM) ---
 def calculate_flat_len(lengths, angles, thickness):
     total_outer = sum(lengths)
     # Basit Kural: 90 derecede T kadar düş, diğerlerinde orantıla
@@ -87,8 +86,8 @@ def generate_solid_geometry(lengths, angles, dirs, thickness, inner_radius):
         directions.append(dir_val)
 
     # Katı Model (Polygon) Oluşturma
-    # Sacı kalınlığı kadar offsetleyerek çiziyoruz
-    curr_pos_x, curr_pos_y = 0, thickness # Başlangıç Y'si thickness kadar yukarıda
+    # Sacı kalınlığı kadar offsetleyerek çiziyoruz (Y ekseninde yukarı kaldır)
+    curr_pos_x, curr_pos_y = 0, thickness 
     curr_dir_ang = 0
     
     top_x, top_y = [0], [thickness]
@@ -162,6 +161,7 @@ def add_smart_dims(fig, px, py, lengths):
     dim_offset = 60 # Parçadan uzaklık
     
     for i in range(len(lengths)):
+        # Parça segmentinin başlangıç ve bitiş noktaları (Apex'ten alıyoruz)
         p1 = np.array([px[i], py[i]])
         p2 = np.array([px[i+1], py[i+1]])
         
@@ -170,7 +170,8 @@ def add_smart_dims(fig, px, py, lengths):
         if L < 0.1: continue
         u = vec / L
         
-        # SAĞ EL KURALI: Gidiş yönünün sağına dik vektör (y, -x)
+        # SAĞ EL KURALI: Gidiş yönünün sağına dik vektör (u_y, -u_x)
+        # Bu, çizgi nereye dönerse dönsün her zaman "dış" tarafı bulur.
         normal = np.array([u[1], -u[0]])
         
         d1 = p1 + normal * dim_offset
@@ -243,7 +244,6 @@ with st.sidebar:
 # --- 7. ANA EKRAN ---
 st.subheader("Büküm Simülasyonu")
 
-# Verileri Çek
 cur_l = st.session_state.bending_data["lengths"]
 cur_a = st.session_state.bending_data["angles"]
 cur_d = st.session_state.bending_data["dirs"]
@@ -252,11 +252,10 @@ cur_d = st.session_state.bending_data["dirs"]
 flat_val, total_out = calculate_flat_len(cur_l, cur_a, th)
 sx, sy, ax, ay, drs = generate_solid_geometry(cur_l, cur_a, cur_d, th, rad)
 
-# --- SEKME YAPISI (TÜM ÖZELLİKLER BURADA) ---
+# Sekme Yapısı
 tab1, tab2 = st.tabs(["📐 Teknik Resim", "🎬 Operatör Simülasyonu"])
 
 with tab1:
-    # Sonuç Kartı
     st.markdown(f"""
     <div class="result-card">
         <div class="result-title">TOPLAM SAC AÇINIMI (LAZER KESİM ÖLÇÜSÜ)</div>
@@ -271,7 +270,7 @@ with tab1:
         x=sx, y=sy, fill='toself', fillcolor='rgba(70, 130, 180, 0.4)',
         line=dict(color='#004a80', width=2), mode='lines', hoverinfo='skip'
     ))
-    # Ölçülendirme
+    # Ölçülendirme (Sağ El Kuralı ile düzeltilmiş)
     add_smart_dims(fig, ax, ay, cur_l)
     
     # Açı Etiketleri
@@ -304,30 +303,40 @@ with tab2:
         c_play, c_reset = st.columns([1, 4])
         if c_play.button("▶️ Oynat"):
             placeholder = st.empty()
+            # Adım adım animasyon döngüsü
             for s in range(len(cur_a) + 1):
-                # Anlık geometri
+                # Anlık geometriyi hesapla (O ana kadarki bükümler yapılmış, gerisi düz)
                 temp_a = [180.0] * len(cur_a)
                 for k in range(s): temp_a[k] = cur_a[k]
                 
                 tsx, tsy, tax, tay, tdrs = generate_solid_geometry(cur_l, temp_a, cur_d, th, rad)
                 
-                # Animasyon Çizimi
+                # Çizim
                 fig_anim = go.Figure()
-                fig_anim.add_trace(go.Scatter(x=tsx, y=tsy, fill='toself', fillcolor='rgba(70, 130, 180, 0.4)', line=dict(color='#004a80', width=2)))
+                fig_anim.add_trace(go.Scatter(
+                    x=tsx, y=tsy, fill='toself', fillcolor='rgba(70, 130, 180, 0.4)', 
+                    line=dict(color='#004a80', width=2)
+                ))
                 
-                # Bıçak Gösterimi
+                # Bıçak Gösterimi (Aktif büküm noktasında)
                 if s > 0:
                     bx, by = tax[s], tay[s] # Büküm noktası
-                    fig_anim.add_trace(go.Scatter(x=[bx], y=[by], mode='markers', marker=dict(size=15, color='red', symbol='x')))
+                    # Basit bir "V" kalıp işareti
+                    fig_anim.add_trace(go.Scatter(
+                        x=[bx], y=[by], mode='markers', 
+                        marker=dict(size=15, color='red', symbol='x-thin', line=dict(width=2, color='red'))
+                    ))
                 
+                # Zoom ayarını sabitle (Titremeyi önler)
                 fig_anim.update_layout(
-                    height=500, xaxis=dict(visible=False, scaleanchor="y", range=[min(sx)-50, max(sx)+50]),
+                    height=500, 
+                    xaxis=dict(visible=False, scaleanchor="y", range=[min(sx)-50, max(sx)+50]),
                     yaxis=dict(visible=False, range=[min(sy)-50, max(sy)+50]),
-                    title=f"Adım {s}: {cur_a[s-1]}°" if s > 0 else "Hazırlık",
+                    title=f"Adım {s}: {cur_a[s-1]}° ({cur_d[s-1]})" if s > 0 else "Hazırlık: Düz Sac Yerleşimi",
                     plot_bgcolor="white"
                 )
                 placeholder.plotly_chart(fig_anim, use_container_width=True)
-                time.sleep(1.0)
+                time.sleep(1.0) # Bekleme süresi
         
         if c_reset.button("⏹️ Sıfırla"):
             st.session_state.anim_step = 0
