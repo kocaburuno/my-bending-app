@@ -32,7 +32,6 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # --- 2. HAFIZA (STATE) YÖNETİMİ ---
-# Veri tutarlılığı için tek bir dictionary kullanıyoruz
 if "bending_data" not in st.session_state:
     st.session_state.bending_data = {
         "lengths": [100.0, 100.0],
@@ -44,7 +43,7 @@ def load_preset(l, a, d):
     st.session_state.bending_data = {"lengths": l, "angles": a, "dirs": d}
     st.rerun()
 
-# --- 3. HESAPLAMA MOTORU ---
+# --- 3. HESAPLAMA MOTORU (AÇINIM) ---
 def calculate_flat_len(lengths, angles, thickness):
     total_outer = sum(lengths)
     # Basit Kural: 90 derecede T kadar düş, diğerlerinde orantıla
@@ -56,17 +55,17 @@ def calculate_flat_len(lengths, angles, thickness):
 def generate_solid_geometry(lengths, angles, dirs, thickness, inner_radius):
     outer_radius = inner_radius + thickness
     
-    # Apex (Teorik Hat) Noktaları
+    # Apex (Teorik Hat) Noktaları - Ölçülendirme için referans
     apex_x, apex_y = [0], [0]
     curr_x, curr_y = 0, 0
     curr_ang = 0 
     
     deviation_angles, directions = [], []
     
+    # 1. Aşama: Apex Hattını Hesapla
     for i in range(len(lengths)):
         L = lengths[i]
         
-        # Büküm parametreleri
         if i < len(angles):
             user_angle = angles[i]
             d_str = dirs[i]
@@ -75,7 +74,6 @@ def generate_solid_geometry(lengths, angles, dirs, thickness, inner_radius):
         else:
             dev_deg, dir_val = 0, 0
             
-        # Apex hattı ilerlemesi
         curr_x += L * np.cos(curr_ang)
         curr_y += L * np.sin(curr_ang)
         apex_x.append(curr_x); apex_y.append(curr_y)
@@ -86,15 +84,16 @@ def generate_solid_geometry(lengths, angles, dirs, thickness, inner_radius):
         deviation_angles.append(dev_deg)
         directions.append(dir_val)
 
-    # Katı Model (Polygon) Oluşturma
+    # 2. Aşama: Katı Model (Polygon) Oluşturma
     # Sacı kalınlığı kadar offsetleyerek çiziyoruz
-    curr_pos_x, curr_pos_y = 0, thickness # Başlangıç Y'si thickness kadar yukarıda
+    # Başlangıçta sacı Y ekseninde yukarı kaldırıyoruz ki Apex hattı (0,0) tabanda kalsın.
+    curr_pos_x, curr_pos_y = 0, thickness 
     curr_dir_ang = 0
     
     top_x, top_y = [0], [thickness]
     bot_x, bot_y = [0], [0]
     
-    # Büküm Setback Hesapları
+    # Setback ve Radius Hesapları
     setbacks, dev_rads = [0], []
     for deg in deviation_angles:
         if deg == 0: sb, rad_val = 0, 0
@@ -110,7 +109,7 @@ def generate_solid_geometry(lengths, angles, dirs, thickness, inner_radius):
         # Düz kısım uzunluğu
         flat_len = max(0, lengths[i] - setbacks[i] - setbacks[i+1])
         
-        # Düz ilerleme
+        # Düz ilerleme vektörü
         dx = flat_len * np.cos(curr_dir_ang)
         dy = flat_len * np.sin(curr_dir_ang)
         
@@ -131,17 +130,18 @@ def generate_solid_geometry(lengths, angles, dirs, thickness, inner_radius):
             dev = dev_rads[i]
             d_val = directions[i]
             
-            if d_val == 1: # UP
+            if d_val == 1: # UP Büküm
                 cx = curr_pos_x - nx * inner_radius
                 cy = curr_pos_y - ny * inner_radius
                 r_t, r_b = inner_radius, outer_radius
                 start_a, end_a = curr_dir_ang - np.pi/2, curr_dir_ang - np.pi/2 + dev
-            else: # DOWN
+            else: # DOWN Büküm
                 cx = curr_pos_x + nx * outer_radius
                 cy = curr_pos_y + ny * outer_radius
                 r_t, r_b = outer_radius, inner_radius
                 start_a, end_a = curr_dir_ang + np.pi/2, curr_dir_ang + np.pi/2 - dev
             
+            # Yayı çözünürlüklü çiz
             theta = np.linspace(start_a, end_a, 15)
             top_x.extend(cx + r_t * np.cos(theta))
             top_y.extend(cy + r_t * np.sin(theta))
@@ -151,7 +151,7 @@ def generate_solid_geometry(lengths, angles, dirs, thickness, inner_radius):
             curr_pos_x, curr_pos_y = top_x[-1], top_y[-1]
             curr_dir_ang += dev * d_val
 
-    # Poligonu kapat (Top + Bot ters + Top[0])
+    # Poligonu kapat (Top noktaları + Bot noktaları tersten + Top'un ilki)
     final_x = top_x + bot_x[::-1] + [top_x[0]]
     final_y = top_y + bot_y[::-1] + [top_y[0]]
     
@@ -159,9 +159,10 @@ def generate_solid_geometry(lengths, angles, dirs, thickness, inner_radius):
 
 # --- 5. AKILLI ÖLÇÜLENDİRME (SAĞ EL KURALI) ---
 def add_smart_dims(fig, px, py, lengths):
-    dim_offset = 60 # Parçadan uzaklık
+    dim_offset = 60 # Ölçü çizgisinin parçadan uzaklığı
     
     for i in range(len(lengths)):
+        # Parça segmentinin Apex noktaları
         p1 = np.array([px[i], py[i]])
         p2 = np.array([px[i+1], py[i+1]])
         
@@ -170,25 +171,32 @@ def add_smart_dims(fig, px, py, lengths):
         if L < 0.1: continue
         u = vec / L
         
-        # SAĞ EL KURALI: Gidiş yönünün sağına dik vektör (u_y, -u_x)
+        # SAĞ EL KURALI: 
+        # Gidiş yönünün sağına dik vektör (u_y, -u_x).
+        # Bu formül çizgi nereye dönerse dönsün her zaman "dış" tarafı bulur.
         normal = np.array([u[1], -u[0]])
         
         d1 = p1 + normal * dim_offset
         d2 = p2 + normal * dim_offset
         mid = (d1 + d2) / 2
         
-        # Uzatma Çizgileri
+        # Uzatma Çizgileri (Gri, Kesikli)
         fig.add_trace(go.Scatter(
-            x=[p1[0], d1[0], None, p2[0], d2[0]], y=[p1[1], d1[1], None, p2[1], d2[1]],
-            mode='lines', line=dict(color='rgba(150,150,150,0.5)', width=1, dash='dot'), hoverinfo='skip'
+            x=[p1[0], d1[0], None, p2[0], d2[0]], 
+            y=[p1[1], d1[1], None, p2[1], d2[1]],
+            mode='lines', 
+            line=dict(color='rgba(150,150,150,0.5)', width=1, dash='dot'), 
+            hoverinfo='skip'
         ))
-        # Ok Çizgisi
+        # Ok Çizgisi (Siyah)
         fig.add_trace(go.Scatter(
             x=[d1[0], d2[0]], y=[d1[1], d2[1]],
-            mode='lines+markers', marker=dict(symbol='arrow', size=8, angleref="previous", color='black'),
-            line=dict(color='black', width=1.5), hoverinfo='skip'
+            mode='lines+markers', 
+            marker=dict(symbol='arrow', size=8, angleref="previous", color='black'),
+            line=dict(color='black', width=1.5), 
+            hoverinfo='skip'
         ))
-        # Metin
+        # Ölçü Metni
         fig.add_annotation(
             x=mid[0], y=mid[1], text=f"<b>{lengths[i]:.1f}</b>",
             showarrow=False, font=dict(color="#B22222", size=14), bgcolor="white", opacity=0.9
@@ -211,8 +219,7 @@ with st.sidebar:
     st.divider()
     st.markdown('<span class="compact-label">1. Başlangıç Kenarı (mm)</span>', unsafe_allow_html=True)
     
-    # HATA FIX: Key'ler artık loop index'ine göre değil, veriye göre unique.
-    # Yine de en güvenli yöntem index tabanlı unique string üretmek.
+    # HATA FIX: Key'ler unique ID olarak atanıyor.
     st.session_state.bending_data["lengths"][0] = st.number_input(
         "L0", value=float(st.session_state.bending_data["lengths"][0]), step=0.1, label_visibility="collapsed", key="input_l0"
     )
@@ -246,6 +253,7 @@ with st.sidebar:
 # --- 7. ANA EKRAN ---
 st.subheader("Büküm Simülasyonu")
 
+# Verileri Çek
 cur_l = st.session_state.bending_data["lengths"]
 cur_a = st.session_state.bending_data["angles"]
 cur_d = st.session_state.bending_data["dirs"]
@@ -254,10 +262,11 @@ cur_d = st.session_state.bending_data["dirs"]
 flat_val, total_out = calculate_flat_len(cur_l, cur_a, th)
 sx, sy, ax, ay, drs = generate_solid_geometry(cur_l, cur_a, cur_d, th, rad)
 
-# Sekme Yapısı
+# --- SEKME YAPISI (TÜM ÖZELLİKLER BURADA) ---
 tab1, tab2 = st.tabs(["📐 Teknik Resim", "🎬 Operatör Simülasyonu"])
 
 with tab1:
+    # Sonuç Kartı
     st.markdown(f"""
     <div class="result-card">
         <div class="result-title">TOPLAM SAC AÇINIMI (LAZER KESİM ÖLÇÜSÜ)</div>
@@ -267,12 +276,14 @@ with tab1:
     """, unsafe_allow_html=True)
 
     fig = go.Figure()
-    # Katı Model
+    
+    # Katı Model (Polygon - Dolgulu)
     fig.add_trace(go.Scatter(
         x=sx, y=sy, fill='toself', fillcolor='rgba(70, 130, 180, 0.4)',
         line=dict(color='#004a80', width=2), mode='lines', hoverinfo='skip'
     ))
-    # Ölçülendirme
+    
+    # Ölçülendirme (Sağ El Kuralı)
     add_smart_dims(fig, ax, ay, cur_l)
     
     # Açı Etiketleri
@@ -303,14 +314,16 @@ with tab2:
         if "anim_step" not in st.session_state: st.session_state.anim_step = 0
         
         c_play, c_reset = st.columns([1, 4])
+        
+        # OYNAT BUTONU VE ANİMASYON DÖNGÜSÜ
         if c_play.button("▶️ Oynat"):
             placeholder = st.empty()
-            # Adım adım animasyon döngüsü
             for s in range(len(cur_a) + 1):
-                # Anlık geometriyi hesapla
+                # Anlık geometriyi hesapla (O ana kadarki bükümler yapılmış, gerisi düz)
                 temp_a = [180.0] * len(cur_a)
                 for k in range(s): temp_a[k] = cur_a[k]
                 
+                # Katı model oluştur
                 tsx, tsy, tax, tay, tdrs = generate_solid_geometry(cur_l, temp_a, cur_d, th, rad)
                 
                 # Çizim
@@ -320,22 +333,24 @@ with tab2:
                     line=dict(color='#004a80', width=2)
                 ))
                 
-                # Bıçak Gösterimi
+                # Bıçak Gösterimi (Aktif büküm noktasında V şeklinde marker)
                 if s > 0:
                     bx, by = tax[s], tay[s] # Büküm noktası
                     fig_anim.add_trace(go.Scatter(
                         x=[bx], y=[by], mode='markers', 
-                        marker=dict(size=15, color='red', symbol='x-thin', line=dict(width=2, color='red'))
+                        marker=dict(size=15, color='red', symbol='x-thin', line=dict(width=3, color='red'))
                     ))
                 
+                # Grafik Ayarları
                 fig_anim.update_layout(
-                    height=500, xaxis=dict(visible=False, scaleanchor="y", range=[min(sx)-50, max(sx)+50]),
+                    height=500, 
+                    xaxis=dict(visible=False, scaleanchor="y", range=[min(sx)-50, max(sx)+50]), # Ölçeği sabitle
                     yaxis=dict(visible=False, range=[min(sy)-50, max(sy)+50]),
                     title=f"Adım {s}: {cur_a[s-1]}° ({cur_d[s-1]})" if s > 0 else "Hazırlık: Düz Sac Yerleşimi",
                     plot_bgcolor="white"
                 )
                 placeholder.plotly_chart(fig_anim, use_container_width=True)
-                time.sleep(1.0) # Bekleme süresi
+                time.sleep(1.0) # Adımlar arası bekleme
         
         if c_reset.button("⏹️ Sıfırla"):
             st.session_state.anim_step = 0
