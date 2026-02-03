@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape" version="1.1" width="595" height="842" viewBox="0 0 595 842">
+<defs>
+<clipPath id="clip_1">
+<path transform="matrix(.12,0,0,-.12,14,794)" d="M899 1506H3824V4705H899V1506"/>
+</clipPath>
+</defs>
+<g clip-path="url(#clip_1)">
+<g inkscape:groupmode="layer" inkscape:label="0">
+<path transform="matrix(.12,0,0,-.12,14,794)" d="M3015 4055H1598L2779 3582ZM1598 4055 2779 3582H1834Z"/>
+<path transform="matrix(.12,0,0,-.12,14,794)" stroke-linecap="butt" stroke-miterlimit="10" stroke-linejoin="miter" fill="none" stroke="#000000" d="M3015 4055H1598L2779 3582ZM1598 4055 2779 3582H1834Z"/>
+<path transform="matrix(.12,0,0,-.12,14,794)" d="M2779 3582H1834L2779 2402ZM1834 3582 2779 2402H1834Z"/>
+<path transform="matrix(.12,0,0,-.12,14,794)" stroke-linecap="butt" stroke-miterlimit="10" stroke-linejoin="miter" fill="none" stroke="#000000" d="M2779 3582H1834L2779 2402ZM1834 3582 2779 2402H1834Z"/>
+<path transform="matrix(.12,0,0,-.12,14,794)" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" fill="none" stroke="#000000" d="M1834 3582V2402H2779V3582"/>
+<path transform="matrix(.12,0,0,-.12,14,794)" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" fill="none" stroke="#000000" d="M1834 3582 1598 4055H3015L2779 3582"/>
+</g>
+</g>
+</svg>
