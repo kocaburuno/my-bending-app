@@ -4,6 +4,8 @@ import numpy as np
 import base64
 import os
 import time
+from PIL import Image, ImageOps
+from io import BytesIO
 
 # --- 1. AYARLAR ---
 st.set_page_config(page_title="Büküm Simülasyonu Pro", layout="wide", initial_sidebar_state="expanded")
@@ -23,28 +25,49 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# --- 2. AKILCI DOSYA YÖNETİMİ (MUTLAK YOL) ---
-# app.py'nin olduğu klasörü tam adres (absolute path) olarak alıyoruz.
+# --- 2. RESİM İŞLEME VE KIRPMA (AUTO-CROP) ---
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 ASSETS_DIR = os.path.join(BASE_DIR, "assets")
 
-def get_image_path(filename):
-    """Dosyanın tam yolunu verir."""
-    return os.path.join(ASSETS_DIR, filename)
-
-def get_local_image_base64(filename):
-    """Resmi bulur, okur ve Plotly için Base64'e çevirir."""
-    full_path = get_image_path(filename)
-    
-    if not os.path.exists(full_path):
+def process_and_crop_image(filename):
+    """
+    Resmi yükler, beyaz alanları şeffaf yapar ve 
+    etrafındaki gereksiz boşlukları (bbox) kırparak Base64'e çevirir.
+    """
+    path = os.path.join(ASSETS_DIR, filename)
+    if not os.path.exists(path):
         return None
     
-    with open(full_path, "rb") as f:
-        encoded = base64.b64encode(f.read()).decode()
-    return f"data:image/png;base64,{encoded}"
+    try:
+        img = Image.open(path)
+        img = img.convert("RGBA")
+        
+        # 1. Beyaz Pixelleri Şeffaf Yap (Opsiyonel ama garanti olsun)
+        datas = img.getdata()
+        newData = []
+        for item in datas:
+            # Eğer pixel çok beyazsa (R>240, G>240, B>240), şeffaf yap
+            if item[0] > 240 and item[1] > 240 and item[2] > 240:
+                newData.append((255, 255, 255, 0))
+            else:
+                newData.append(item)
+        img.putdata(newData)
+        
+        # 2. İçerik Kutusunu Bul (Bounding Box) ve Kırp
+        bbox = img.getbbox()
+        if bbox:
+            img = img.crop(bbox)
+            
+        # 3. Base64'e çevir
+        buffered = BytesIO()
+        img.save(buffered, format="PNG")
+        return "data:image/png;base64," + base64.b64encode(buffered.getvalue()).decode()
+        
+    except Exception as e:
+        st.error(f"Resim işleme hatası ({filename}): {e}")
+        return None
 
 # --- 3. KALIP VERİTABANI ---
-# Dosya isimleri GitHub'daki ile birebir aynı olmalı (Harf duyarlı!)
 TOOL_DB = {
     "holder": {
         "filename": "holder.png", 
@@ -65,7 +88,7 @@ TOOL_DB = {
     },
     "dies": {
         "120x120 (Standart)": {
-            "filename": "die_v120.png",  # Github'da görünen isim
+            "filename": "die_v120.png",
             "width_mm": 60.0,
             "height_mm": 60.0
         }
@@ -179,31 +202,22 @@ def add_smart_dims(fig, px, py, lengths):
 with st.sidebar:
     st.header("⚙️ Ayarlar")
     
-    # --- DOSYA KONTROL ALANI (DEBUG) ---
-    with st.expander("🛠️ Dosya Kontrolü", expanded=True):
-        st.write(f"📂 Kök Dizin: `{BASE_DIR}`")
+    # DEBUG: Dosya Durumu
+    with st.expander("🛠️ Dosya ve Kırpma Durumu", expanded=True):
         if os.path.exists(ASSETS_DIR):
+            st.success("✅ Assets klasörü erişilebilir.")
             files = os.listdir(ASSETS_DIR)
-            st.success(f"✅ 'assets' bulundu. ({len(files)} dosya)")
+            die_f = TOOL_DB["dies"]["120x120 (Standart)"]["filename"]
+            punch_f = TOOL_DB["punches"]["Gooseneck (Deve Boynu)"]["filename"]
             
-            # Seçilen kalıpları kontrol et
-            die_file = TOOL_DB["dies"]["120x120 (Standart)"]["filename"]
-            punch_file = TOOL_DB["punches"]["Gooseneck (Deve Boynu)"]["filename"]
+            if die_f in files: st.caption(f"✔️ {die_f} bulundu")
+            else: st.error(f"❌ {die_f} EKSİK")
             
-            if die_file in files: 
-                st.caption(f"✔️ {die_file} OK")
-                # Küçük bir önizleme göster
-                st.image(os.path.join(ASSETS_DIR, die_file), width=50)
-            else: 
-                st.error(f"❌ {die_file} YOK!")
-                
-            if punch_file in files:
-                st.caption(f"✔️ {punch_file} OK")
-            else:
-                st.error(f"❌ {punch_file} YOK!")
+            if punch_f in files: st.caption(f"✔️ {punch_f} bulundu")
+            else: st.error(f"❌ {punch_f} EKSİK")
         else:
-            st.error("🚨 'assets' klasörü YOK! Lütfen repo ana dizininde olduğundan emin olun.")
-    
+            st.error("🚨 Assets klasörü bulunamadı!")
+
     sel_punch = st.selectbox("Üst Bıçak", list(TOOL_DB["punches"].keys()))
     sel_die = st.selectbox("Alt Kalıp", list(TOOL_DB["dies"].keys()))
     
@@ -293,51 +307,47 @@ with tab2:
                  fs_x, fs_y = [x - c_dat['x'] for x in s_x], [y - c_dat['y'] for y in s_y]
             
             f_sim = go.Figure()
-            f_sim.add_trace(go.Scatter(x=fs_x, y=fs_y, fill='toself', fillcolor='rgba(220, 38, 38, 0.9)', line=dict(color='#991b1b', width=2), name='Sac'))
             
-            # --- RESİMLERİ YÜKLEME ---
+            # --- SAC PARÇASI (LAYER BELOW OLSA BİLE ÖNCE EKLENİR) ---
+            f_sim.add_trace(go.Scatter(x=fs_x, y=fs_y, fill='toself', fillcolor='rgba(220, 38, 38, 0.9)', line=dict(color='#991b1b', width=3), name='Sac'))
+            
+            # --- RESİMLER (KIRPILMIŞ HALİYLE) ---
             try:
-                # 1. ALT KALIP (SABİT)
+                # 1. ALT KALIP (SABİT - YANCHOR=TOP)
                 die_d = TOOL_DB["dies"][sel_die]
-                die_src = get_local_image_base64(die_d["filename"])
+                die_src = process_and_crop_image(die_d["filename"]) # KIRPMA FONKSİYONU
                 if die_src: 
-                    # DÜZELTME: xref="x", yref="y" EKLENDİ!
                     f_sim.add_layout_image(dict(
-                        source=die_src, 
-                        x=0, y=0, 
+                        source=die_src, x=0, y=0, 
                         sizex=die_d["width_mm"], sizey=die_d["height_mm"], 
-                        xanchor="center", yanchor="top", 
-                        layer="below",
-                        xref="x", yref="y" # <-- İŞTE BU EKSİKTİ!
+                        xanchor="center", yanchor="top", layer="below",
+                        xref="x", yref="y"
                     ))
                 
-                # 2. BIÇAK (HAREKETLİ)
+                # 2. BIÇAK (HAREKETLİ - YANCHOR=BOTTOM)
+                # Kırpıldığı için resmin en altı artık bıçağın en ucudur. Koordinat %100 oturur.
                 punch_d = TOOL_DB["punches"][sel_punch]
-                punch_src = get_local_image_base64(punch_d["filename"])
+                punch_src = process_and_crop_image(punch_d["filename"]) # KIRPMA FONKSİYONU
                 if punch_src: 
                     f_sim.add_layout_image(dict(
-                        source=punch_src, 
-                        x=0, y=current_stroke_y, 
+                        source=punch_src, x=0, y=current_stroke_y, 
                         sizex=punch_d["width_mm"], sizey=punch_d["height_mm"], 
-                        xanchor="center", yanchor="bottom", 
-                        layer="below",
-                        xref="x", yref="y" # <-- İŞTE BU EKSİKTİ!
+                        xanchor="center", yanchor="bottom", layer="below",
+                        xref="x", yref="y"
                     ))
                 
-                # 3. TUTUCU (HAREKETLİ)
+                # 3. TUTUCU
                 hold_d = TOOL_DB["holder"]
-                hold_src = get_local_image_base64(hold_d["filename"])
+                hold_src = process_and_crop_image(hold_d["filename"]) # KIRPMA FONKSİYONU
                 if hold_src: 
                     f_sim.add_layout_image(dict(
-                        source=hold_src, 
-                        x=0, y=current_stroke_y + punch_d["height_mm"], 
+                        source=hold_src, x=0, y=current_stroke_y + punch_d["height_mm"], 
                         sizex=hold_d["width_mm"], sizey=hold_d["height_mm"], 
-                        xanchor="center", yanchor="bottom", 
-                        layer="below",
-                        xref="x", yref="y" # <-- İŞTE BU EKSİKTİ!
+                        xanchor="center", yanchor="bottom", layer="below",
+                        xref="x", yref="y"
                     ))
             except Exception as e:
-                st.error(f"Görsel yükleme hatası: {e}")
+                st.error(f"Görsel hatası: {e}")
 
             info = "Hazırlık" if curr_idx == 0 else f"Adım {curr_idx}"
             f_sim.update_layout(
