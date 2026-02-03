@@ -4,13 +4,12 @@ import numpy as np
 import base64
 import os
 import time
-from PIL import Image, ImageOps
+from PIL import Image
 from io import BytesIO
 
 # --- 1. AYARLAR ---
 st.set_page_config(page_title="Büküm Simülasyonu Pro", layout="wide", initial_sidebar_state="expanded")
 
-# --- CSS VE STİL ---
 st.markdown("""
     <style>
     .block-container { padding-top: 3rem !important; padding-bottom: 2rem !important; }
@@ -25,73 +24,45 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# --- 2. RESİM İŞLEME VE KIRPMA (AUTO-CROP) ---
+# --- 2. DOSYA VE RESİM İŞLEMLERİ ---
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 ASSETS_DIR = os.path.join(BASE_DIR, "assets")
 
 def process_and_crop_image(filename):
-    """
-    Resmi yükler, beyaz alanları şeffaf yapar ve 
-    etrafındaki gereksiz boşlukları (bbox) kırparak Base64'e çevirir.
-    """
+    """Resmi yükler ve boşlukları kırparak Base64 yapar."""
     path = os.path.join(ASSETS_DIR, filename)
     if not os.path.exists(path):
         return None
-    
     try:
-        img = Image.open(path)
-        img = img.convert("RGBA")
-        
-        # 1. Beyaz Pixelleri Şeffaf Yap (Opsiyonel ama garanti olsun)
+        img = Image.open(path).convert("RGBA")
+        # Beyaz pixelleri şeffaf yap
         datas = img.getdata()
         newData = []
         for item in datas:
-            # Eğer pixel çok beyazsa (R>240, G>240, B>240), şeffaf yap
             if item[0] > 240 and item[1] > 240 and item[2] > 240:
                 newData.append((255, 255, 255, 0))
             else:
                 newData.append(item)
         img.putdata(newData)
-        
-        # 2. İçerik Kutusunu Bul (Bounding Box) ve Kırp
+        # Kırp
         bbox = img.getbbox()
-        if bbox:
-            img = img.crop(bbox)
-            
-        # 3. Base64'e çevir
+        if bbox: img = img.crop(bbox)
+        # Kaydet
         buffered = BytesIO()
         img.save(buffered, format="PNG")
         return "data:image/png;base64," + base64.b64encode(buffered.getvalue()).decode()
-        
-    except Exception as e:
-        st.error(f"Resim işleme hatası ({filename}): {e}")
+    except:
         return None
 
 # --- 3. KALIP VERİTABANI ---
 TOOL_DB = {
-    "holder": {
-        "filename": "holder.png", 
-        "width_mm": 60.0,
-        "height_mm": 60.0
-    },
+    "holder": {"filename": "holder.png", "width_mm": 60.0, "height_mm": 60.0},
     "punches": {
-        "Gooseneck (Deve Boynu)": {
-            "filename": "punch_gooseneck.png", 
-            "height_mm": 135.0,
-            "width_mm": 80.0
-        },
-        "Standart (Balta)": {
-            "filename": "punch_std.png", 
-            "height_mm": 135.0,
-            "width_mm": 40.0
-        }
+        "Gooseneck (Deve Boynu)": {"filename": "punch_gooseneck.png", "height_mm": 135.0, "width_mm": 80.0},
+        "Standart (Balta)": {"filename": "punch_std.png", "height_mm": 135.0, "width_mm": 40.0}
     },
     "dies": {
-        "120x120 (Standart)": {
-            "filename": "die_v120.png",
-            "width_mm": 60.0,
-            "height_mm": 60.0
-        }
+        "120x120 (Standart)": {"filename": "die_v120.png", "width_mm": 60.0, "height_mm": 60.0}
     }
 }
 
@@ -169,19 +140,32 @@ def generate_solid_geometry(lengths, angles, dirs, thickness, inner_radius):
     final_y = top_y + bot_y[::-1] + [top_y[0]]
     return final_x, final_y, apex_x, apex_y, directions, bend_centers
 
+# --- 6. HİZALAMA MOTORU (DÜZELTİLDİ: YATAY BAŞLANGIÇ) ---
 def align_geometry_to_bend(x_pts, y_pts, center_x, center_y, angle_cum, bend_angle, bend_dir, thickness):
+    # 1. Geometriyi merkeze taşı
     new_x = [x - center_x for x in x_pts]
     new_y = [y - center_y for y in y_pts]
-    dev = (180 - bend_angle)
-    rotation = -angle_cum
-    if bend_dir == "UP": rotation += np.radians(dev / 2) - np.pi/2
-    else: rotation -= np.radians(dev / 2) + np.pi/2
+    
+    # 2. Döndürme Açısı Hesabı (KRİTİK DÜZELTME)
+    # Eski hali: Sabit -90 derece ekliyordu, bu da 180 derecede dikey yapıyordu.
+    # Yeni hali: -angle_cum yaparak önce sacı sıfıra (yataya) çekiyoruz.
+    # Sonra büküm açısının yarısı kadar kaldırıyoruz.
+    
+    base_rotation = -angle_cum  # Bu sacı tamamen yatay yapar
+    bend_lift = np.radians(180 - bend_angle) / 2 # Kolların havaya kalkma açısı
+    
+    if bend_dir == "UP":
+        rotation = base_rotation + bend_lift
+    else:
+        rotation = base_rotation - bend_lift
+        
     cos_t, sin_t = np.cos(rotation), np.sin(rotation)
     rotated_x, rotated_y = [], []
     for i in range(len(new_x)):
         rx = new_x[i] * cos_t - new_y[i] * sin_t
         ry = new_x[i] * sin_t + new_y[i] * cos_t
         rotated_x.append(rx); rotated_y.append(ry + thickness/2)
+        
     return rotated_x, rotated_y
 
 def add_smart_dims(fig, px, py, lengths):
@@ -198,25 +182,16 @@ def add_smart_dims(fig, px, py, lengths):
         fig.add_trace(go.Scatter(x=[d1[0], d2[0]], y=[d1[1], d2[1]], mode='lines+markers', marker=dict(symbol='arrow', size=8, angleref='previous', color='black'), line=dict(color='black'), hoverinfo='skip'))
         fig.add_annotation(x=mid[0], y=mid[1], text=f"<b>{lengths[i]:.1f}</b>", showarrow=False, font=dict(color="#B22222", size=12), bgcolor="white")
 
-# --- 6. SIDEBAR VE DEBUG PANELİ ---
+# --- 7. SIDEBAR ---
 with st.sidebar:
     st.header("⚙️ Ayarlar")
-    
-    # DEBUG: Dosya Durumu
-    with st.expander("🛠️ Dosya ve Kırpma Durumu", expanded=True):
+    # Dosya Kontrol
+    with st.expander("🛠️ Dosya Durumu", expanded=False):
         if os.path.exists(ASSETS_DIR):
-            st.success("✅ Assets klasörü erişilebilir.")
             files = os.listdir(ASSETS_DIR)
-            die_f = TOOL_DB["dies"]["120x120 (Standart)"]["filename"]
-            punch_f = TOOL_DB["punches"]["Gooseneck (Deve Boynu)"]["filename"]
-            
-            if die_f in files: st.caption(f"✔️ {die_f} bulundu")
-            else: st.error(f"❌ {die_f} EKSİK")
-            
-            if punch_f in files: st.caption(f"✔️ {punch_f} bulundu")
-            else: st.error(f"❌ {punch_f} EKSİK")
+            st.success(f"Assets OK ({len(files)} dosya)")
         else:
-            st.error("🚨 Assets klasörü bulunamadı!")
+            st.error("Assets YOK!")
 
     sel_punch = st.selectbox("Üst Bıçak", list(TOOL_DB["punches"].keys()))
     sel_die = st.selectbox("Alt Kalıp", list(TOOL_DB["dies"].keys()))
@@ -239,7 +214,7 @@ with st.sidebar:
     if st.button("➕ EKLE"): st.session_state.bending_data["lengths"].append(50.0); st.session_state.bending_data["angles"].append(90.0); st.session_state.bending_data["dirs"].append("UP"); st.rerun()
     if st.button("🗑️ SİL"): st.session_state.bending_data["lengths"].pop(); st.session_state.bending_data["angles"].pop(); st.session_state.dirs.pop(); st.rerun()
 
-# --- 7. ANA EKRAN ---
+# --- 8. ANA EKRAN ---
 cur_l = st.session_state.bending_data["lengths"]
 cur_a = st.session_state.bending_data["angles"]
 cur_d = st.session_state.bending_data["dirs"]
@@ -254,13 +229,7 @@ with tab1:
     fig.add_trace(go.Scatter(x=sx, y=sy, fill='toself', fillcolor='rgba(70, 130, 180, 0.4)', line=dict(color='#004a80', width=2), mode='lines'))
     add_smart_dims(fig, ax, ay, cur_l)
     
-    fig.update_layout(
-        height=600, 
-        plot_bgcolor="white",
-        yaxis=dict(scaleanchor="x", scaleratio=1, visible=False), 
-        xaxis=dict(visible=False),
-        margin=dict(l=20, r=20, t=20, b=20)
-    )
+    fig.update_layout(height=600, plot_bgcolor="white", yaxis=dict(scaleanchor="x", scaleratio=1, visible=False), xaxis=dict(visible=False), margin=dict(l=20, r=20, t=20, b=20))
     st.plotly_chart(fig, use_container_width=True)
 
 with tab2:
@@ -307,55 +276,32 @@ with tab2:
                  fs_x, fs_y = [x - c_dat['x'] for x in s_x], [y - c_dat['y'] for y in s_y]
             
             f_sim = go.Figure()
-            
-            # --- SAC PARÇASI (LAYER BELOW OLSA BİLE ÖNCE EKLENİR) ---
             f_sim.add_trace(go.Scatter(x=fs_x, y=fs_y, fill='toself', fillcolor='rgba(220, 38, 38, 0.9)', line=dict(color='#991b1b', width=3), name='Sac'))
             
-            # --- RESİMLER (KIRPILMIŞ HALİYLE) ---
+            # --- PNG GÖRSELLER (OTOMATİK KIRPILMIŞ) ---
             try:
-                # 1. ALT KALIP (SABİT - YANCHOR=TOP)
+                # 1. ALT KALIP
                 die_d = TOOL_DB["dies"][sel_die]
-                die_src = process_and_crop_image(die_d["filename"]) # KIRPMA FONKSİYONU
+                die_src = process_and_crop_image(die_d["filename"])
                 if die_src: 
-                    f_sim.add_layout_image(dict(
-                        source=die_src, x=0, y=0, 
-                        sizex=die_d["width_mm"], sizey=die_d["height_mm"], 
-                        xanchor="center", yanchor="top", layer="below",
-                        xref="x", yref="y"
-                    ))
+                    f_sim.add_layout_image(dict(source=die_src, x=0, y=0, sizex=die_d["width_mm"], sizey=die_d["height_mm"], xanchor="center", yanchor="top", layer="below", xref="x", yref="y"))
                 
-                # 2. BIÇAK (HAREKETLİ - YANCHOR=BOTTOM)
-                # Kırpıldığı için resmin en altı artık bıçağın en ucudur. Koordinat %100 oturur.
+                # 2. BIÇAK
                 punch_d = TOOL_DB["punches"][sel_punch]
-                punch_src = process_and_crop_image(punch_d["filename"]) # KIRPMA FONKSİYONU
+                punch_src = process_and_crop_image(punch_d["filename"])
                 if punch_src: 
-                    f_sim.add_layout_image(dict(
-                        source=punch_src, x=0, y=current_stroke_y, 
-                        sizex=punch_d["width_mm"], sizey=punch_d["height_mm"], 
-                        xanchor="center", yanchor="bottom", layer="below",
-                        xref="x", yref="y"
-                    ))
+                    f_sim.add_layout_image(dict(source=punch_src, x=0, y=current_stroke_y, sizex=punch_d["width_mm"], sizey=punch_d["height_mm"], xanchor="center", yanchor="bottom", layer="below", xref="x", yref="y"))
                 
                 # 3. TUTUCU
                 hold_d = TOOL_DB["holder"]
-                hold_src = process_and_crop_image(hold_d["filename"]) # KIRPMA FONKSİYONU
+                hold_src = process_and_crop_image(hold_d["filename"])
                 if hold_src: 
-                    f_sim.add_layout_image(dict(
-                        source=hold_src, x=0, y=current_stroke_y + punch_d["height_mm"], 
-                        sizex=hold_d["width_mm"], sizey=hold_d["height_mm"], 
-                        xanchor="center", yanchor="bottom", layer="below",
-                        xref="x", yref="y"
-                    ))
-            except Exception as e:
-                st.error(f"Görsel hatası: {e}")
+                    f_sim.add_layout_image(dict(source=hold_src, x=0, y=current_stroke_y + punch_d["height_mm"], sizex=hold_d["width_mm"], sizey=hold_d["height_mm"], xanchor="center", yanchor="bottom", layer="below", xref="x", yref="y"))
+            except:
+                pass
 
             info = "Hazırlık" if curr_idx == 0 else f"Adım {curr_idx}"
-            f_sim.update_layout(
-                title=dict(text=info, x=0.5), height=600, plot_bgcolor="#f1f5f9",
-                xaxis=dict(visible=False, range=[-150, 150], fixedrange=True),
-                yaxis=dict(visible=False, range=[-100, 250], fixedrange=True, scaleanchor="x", scaleratio=1),
-                showlegend=False, margin=dict(l=0, r=0, t=40, b=0)
-            )
+            f_sim.update_layout(title=dict(text=info, x=0.5), height=600, plot_bgcolor="#f1f5f9", xaxis=dict(visible=False, range=[-150, 150], fixedrange=True), yaxis=dict(visible=False, range=[-100, 250], fixedrange=True, scaleanchor="x", scaleratio=1), showlegend=False, margin=dict(l=0, r=0, t=40, b=0))
             sim_placeholder.plotly_chart(f_sim, use_container_width=True)
             if st.session_state.sim_active: time.sleep(0.05)
             
