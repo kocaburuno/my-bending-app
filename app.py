@@ -8,6 +8,7 @@ import time
 # --- 1. AYARLAR ---
 st.set_page_config(page_title="Büküm Simülasyonu Pro", layout="wide", initial_sidebar_state="expanded")
 
+# --- CSS VE STİL ---
 st.markdown("""
     <style>
     .block-container { padding-top: 3rem !important; padding-bottom: 2rem !important; }
@@ -22,35 +23,28 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# --- DEBUG: DOSYA KONTROLÜ (SOL MENÜDE) ---
-with st.sidebar:
-    st.divider()
-    st.write("📂 **Dosya Durumu:**")
-    if os.path.exists("assets"):
-        found_files = os.listdir("assets")
-        # Kritik dosyalar
-        req_files = ["die_v120.png", "holder.png", "punch_gooseneck.png", "punch_std.png"]
-        missing = [f for f in req_files if f not in found_files]
-        
-        if len(missing) == 0:
-            st.success("✅ Tüm PNG dosyaları yüklü ve hazır.")
-        else:
-            st.error(f"🚨 EKSİK DOSYALAR: {missing}")
-            st.info(f"Bulunanlar: {found_files}")
-    else:
-        st.error("🚨 'assets' klasörü sunucuda bulunamadı!")
+# --- 2. AKILCI DOSYA YÖNETİMİ (MUTLAK YOL) ---
+# app.py'nin olduğu klasörü tam adres (absolute path) olarak alıyoruz.
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+ASSETS_DIR = os.path.join(BASE_DIR, "assets")
 
-# --- 2. RESİM OKUYUCU FONKSİYON ---
-def get_local_image(filename):
-    """Assets klasöründeki PNG dosyasını Base64 formatına çevirir."""
-    path = os.path.join("assets", filename)
-    if not os.path.exists(path):
+def get_image_path(filename):
+    """Dosyanın tam yolunu verir."""
+    return os.path.join(ASSETS_DIR, filename)
+
+def get_local_image_base64(filename):
+    """Resmi bulur, okur ve Plotly için Base64'e çevirir."""
+    full_path = get_image_path(filename)
+    
+    if not os.path.exists(full_path):
         return None
-    with open(path, "rb") as f:
+    
+    with open(full_path, "rb") as f:
         encoded = base64.b64encode(f.read()).decode()
     return f"data:image/png;base64,{encoded}"
 
-# --- 3. KALIP VERİTABANI (RESMİ BOYUTLARI VE İSİMLERİ) ---
+# --- 3. KALIP VERİTABANI ---
+# Dosya isimleri GitHub'daki ile birebir aynı olmalı (Harf duyarlı!)
 TOOL_DB = {
     "holder": {
         "filename": "holder.png", 
@@ -71,7 +65,7 @@ TOOL_DB = {
     },
     "dies": {
         "120x120 (Standart)": {
-            "filename": "die_v120.png",  # Yüklediğin dosya ismi
+            "filename": "die_v120.png",  # Github'da görünen isim
             "width_mm": 60.0,
             "height_mm": 60.0
         }
@@ -82,7 +76,7 @@ TOOL_DB = {
 if "bending_data" not in st.session_state:
     st.session_state.bending_data = {"lengths": [100.0, 100.0], "angles": [90.0], "dirs": ["UP"]}
 
-# --- 5. MATEMATİKSEL HESAPLAMALAR (SAC GEOMETRİSİ) ---
+# --- 5. HESAPLAMA MOTORLARI ---
 def calculate_flat_len(lengths, angles, thickness):
     total_outer = sum(lengths)
     loss = 0.0
@@ -98,7 +92,6 @@ def generate_solid_geometry(lengths, angles, dirs, thickness, inner_radius):
     curr_x, curr_y, curr_ang = 0.0, 0.0, 0.0
     deviation_angles, directions = [], []
     
-    # 1. Apex Hattı
     for i in range(len(lengths)):
         L = lengths[i]
         dev_deg, d_val = 0.0, 0
@@ -111,11 +104,9 @@ def generate_solid_geometry(lengths, angles, dirs, thickness, inner_radius):
         if dev_deg != 0: curr_ang += np.radians(dev_deg) * d_val
         deviation_angles.append(dev_deg); directions.append(d_val)
 
-    # 2. Katı Model
     top_x, top_y = [0.0], [thickness]
     bot_x, bot_y = [0.0], [0.0]
     curr_px, curr_py, curr_da = 0.0, thickness, 0.0
-    
     setbacks, dev_rads = [0.0], []
     for deg in deviation_angles:
         rv = np.radians(deg)
@@ -124,7 +115,6 @@ def generate_solid_geometry(lengths, angles, dirs, thickness, inner_radius):
     setbacks.append(0.0)
     
     bend_centers = []
-    
     for i in range(len(lengths)):
         flat_len = max(0.0, lengths[i] - setbacks[i] - setbacks[i+1])
         dx = flat_len * np.cos(curr_da); dy = flat_len * np.sin(curr_da)
@@ -134,7 +124,6 @@ def generate_solid_geometry(lengths, angles, dirs, thickness, inner_radius):
         
         if i < len(angles):
             bend_centers.append({'x': curr_px + dx, 'y': curr_py + dy, 'angle_cumulative': curr_da})
-
         curr_px += dx; curr_py += dy
         
         if i < len(angles) and deviation_angles[i] > 0:
@@ -175,31 +164,54 @@ def align_geometry_to_bend(x_pts, y_pts, center_x, center_y, angle_cum, bend_ang
 def add_smart_dims(fig, px, py, lengths):
     dim_offset = 60.0
     for i in range(len(lengths)):
-        p1 = np.array([px[i], py[i]])
-        p2 = np.array([px[i+1], py[i+1]])
+        p1 = np.array([px[i], py[i]]); p2 = np.array([px[i+1], py[i+1]])
         vec = p2 - p1
         if np.linalg.norm(vec) < 0.1: continue
         u = vec / np.linalg.norm(vec)
         normal = np.array([u[1], -u[0]])
-        d1 = p1 + normal * dim_offset
-        d2 = p2 + normal * dim_offset
+        d1 = p1 + normal * dim_offset; d2 = p2 + normal * dim_offset
         mid = (d1 + d2) / 2
         fig.add_trace(go.Scatter(x=[p1[0], d1[0], None, p2[0], d2[0]], y=[p1[1], d1[1], None, p2[1], d2[1]], mode='lines', line=dict(color='gray', width=1, dash='dot'), hoverinfo='skip'))
         fig.add_trace(go.Scatter(x=[d1[0], d2[0]], y=[d1[1], d2[1]], mode='lines+markers', marker=dict(symbol='arrow', size=8, angleref='previous', color='black'), line=dict(color='black'), hoverinfo='skip'))
         fig.add_annotation(x=mid[0], y=mid[1], text=f"<b>{lengths[i]:.1f}</b>", showarrow=False, font=dict(color="#B22222", size=12), bgcolor="white")
 
-# --- 6. SIDEBAR KONTROLLERİ ---
+# --- 6. SIDEBAR VE DEBUG PANELİ ---
 with st.sidebar:
     st.header("⚙️ Ayarlar")
+    
+    # --- DOSYA KONTROL ALANI (DEBUG) ---
+    with st.expander("🛠️ Dosya Kontrolü", expanded=True):
+        st.write(f"📂 Kök Dizin: `{BASE_DIR}`")
+        if os.path.exists(ASSETS_DIR):
+            files = os.listdir(ASSETS_DIR)
+            st.success(f"✅ 'assets' bulundu. ({len(files)} dosya)")
+            
+            # Seçilen kalıpları kontrol et
+            die_file = TOOL_DB["dies"]["120x120 (Standart)"]["filename"]
+            punch_file = TOOL_DB["punches"]["Gooseneck (Deve Boynu)"]["filename"]
+            
+            if die_file in files: 
+                st.caption(f"✔️ {die_file} OK")
+                # Küçük bir önizleme göster (Eğer burada görünüyorsa yol doğrudur)
+                st.image(os.path.join(ASSETS_DIR, die_file), width=50)
+            else: 
+                st.error(f"❌ {die_file} YOK!")
+                
+            if punch_file in files:
+                st.caption(f"✔️ {punch_file} OK")
+            else:
+                st.error(f"❌ {punch_file} YOK!")
+        else:
+            st.error("🚨 'assets' klasörü YOK! Lütfen repo ana dizininde olduğundan emin olun.")
+    
     sel_punch = st.selectbox("Üst Bıçak", list(TOOL_DB["punches"].keys()))
     sel_die = st.selectbox("Alt Kalıp", list(TOOL_DB["dies"].keys()))
-    c1, c2 = st.columns(2)
     
+    c1, c2 = st.columns(2)
     th = c1.number_input("Kalınlık (mm)", min_value=0.1, value=2.0, step=0.1, format="%.2f")
     rad = c2.number_input("Radius (mm)", min_value=0.5, value=0.8, step=0.1, format="%.2f")
     
     st.markdown("---")
-    st.subheader("Büküm Adımları")
     st.session_state.bending_data["lengths"][0] = st.number_input("L0 (mm)", value=float(st.session_state.bending_data["lengths"][0]), step=0.1, key="l0", format="%.2f")
     for i in range(len(st.session_state.bending_data["angles"])):
         st.markdown(f"**{i+1}. Büküm**")
@@ -213,7 +225,7 @@ with st.sidebar:
     if st.button("➕ EKLE"): st.session_state.bending_data["lengths"].append(50.0); st.session_state.bending_data["angles"].append(90.0); st.session_state.bending_data["dirs"].append("UP"); st.rerun()
     if st.button("🗑️ SİL"): st.session_state.bending_data["lengths"].pop(); st.session_state.bending_data["angles"].pop(); st.session_state.dirs.pop(); st.rerun()
 
-# --- 7. ANA EKRAN VE SİMÜLASYON ---
+# --- 7. ANA EKRAN ---
 cur_l = st.session_state.bending_data["lengths"]
 cur_a = st.session_state.bending_data["angles"]
 cur_d = st.session_state.bending_data["dirs"]
@@ -281,56 +293,31 @@ with tab2:
                  fs_x, fs_y = [x - c_dat['x'] for x in s_x], [y - c_dat['y'] for y in s_y]
             
             f_sim = go.Figure()
+            f_sim.add_trace(go.Scatter(x=fs_x, y=fs_y, fill='toself', fillcolor='rgba(220, 38, 38, 0.9)', line=dict(color='#991b1b', width=2), name='Sac'))
             
-            # --- SAC (ÖNCE ÇİZİLİR AMA PLOTLY'DE 'layer=below' OLANLAR ARKADA KALIR) ---
-            # Biz resimlerin sacın arkasında kalmasını istiyoruz, bu yüzden resimlere 'below' diyeceğiz.
-            f_sim.add_trace(go.Scatter(x=fs_x, y=fs_y, fill='toself', fillcolor='rgba(220, 38, 38, 0.9)', line=dict(color='#991b1b', width=3), name='Sac'))
-            
-            # --- PNG RESİMLERİN YERLEŞTİRİLMESİ ---
+            # --- RESİMLERİ YÜKLEME ---
             try:
-                # 1. ALT KALIP (SABİT)
+                # Alt Kalıp (Sabit)
                 die_d = TOOL_DB["dies"][sel_die]
-                die_src = get_local_image(die_d["filename"])
+                die_src = get_local_image_base64(die_d["filename"])
                 if die_src: 
-                    f_sim.add_layout_image(
-                        dict(
-                            source=die_src, 
-                            x=0, y=0, 
-                            sizex=die_d["width_mm"], sizey=die_d["height_mm"], 
-                            xanchor="center", yanchor="top", 
-                            layer="below" # Sacın arkasında kalsın
-                        )
-                    )
-
-                # 2. BIÇAK (HAREKETLİ) - UC NOKTASI REFERANS
-                punch_d = TOOL_DB["punches"][sel_punch]
-                punch_src = get_local_image(punch_d["filename"])
-                if punch_src: 
-                    f_sim.add_layout_image(
-                        dict(
-                            source=punch_src, 
-                            x=0, y=current_stroke_y, 
-                            sizex=punch_d["width_mm"], sizey=punch_d["height_mm"], 
-                            xanchor="center", yanchor="bottom", 
-                            layer="below"
-                        )
-                    )
+                    f_sim.add_layout_image(dict(source=die_src, x=0, y=0, sizex=die_d["width_mm"], sizey=die_d["height_mm"], xanchor="center", yanchor="top", layer="below"))
                 
-                # 3. TUTUCU (HAREKETLİ) - BIÇAK TEPESİ REFERANS
+                # Bıçak (Hareketli)
+                punch_d = TOOL_DB["punches"][sel_punch]
+                punch_src = get_local_image_base64(punch_d["filename"])
+                if punch_src: 
+                    # Bıçağın alt ucu current_stroke_y'ye basmalı
+                    f_sim.add_layout_image(dict(source=punch_src, x=0, y=current_stroke_y, sizex=punch_d["width_mm"], sizey=punch_d["height_mm"], xanchor="center", yanchor="bottom", layer="below"))
+                
+                # Tutucu (Hareketli)
                 hold_d = TOOL_DB["holder"]
-                hold_src = get_local_image(hold_d["filename"])
+                hold_src = get_local_image_base64(hold_d["filename"])
                 if hold_src: 
-                    f_sim.add_layout_image(
-                        dict(
-                            source=hold_src, 
-                            x=0, y=current_stroke_y + punch_d["height_mm"], 
-                            sizex=hold_d["width_mm"], sizey=hold_d["height_mm"], 
-                            xanchor="center", yanchor="bottom", 
-                            layer="below"
-                        )
-                    )
+                    # Bıçağın tepesine basmalı
+                    f_sim.add_layout_image(dict(source=hold_src, x=0, y=current_stroke_y + punch_d["height_mm"], sizex=hold_d["width_mm"], sizey=hold_d["height_mm"], xanchor="center", yanchor="bottom", layer="below"))
             except Exception as e:
-                print(f"Hata: {e}")
+                st.error(f"Görsel yükleme hatası: {e}")
 
             info = "Hazırlık" if curr_idx == 0 else f"Adım {curr_idx}"
             f_sim.update_layout(
