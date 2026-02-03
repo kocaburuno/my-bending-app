@@ -7,447 +7,292 @@ import time
 from PIL import Image
 from io import BytesIO
 
-# ==========================================
-# 1. AYARLAR VE SAYFA YAPISI
-# ==========================================
+# --- 1. AYARLAR ---
 st.set_page_config(page_title="Büküm Simülasyonu Pro", layout="wide", initial_sidebar_state="expanded")
 
 st.markdown("""
     <style>
-    .block-container { padding-top: 1rem !important; }
-    .stButton>button { width: 100%; border-radius: 5px; font-weight: bold; border: 1px solid #ddd; }
-    .stButton>button:hover { border-color: #007bff; color: #007bff; }
-    .result-card { background-color: #f0f9ff; padding: 15px; border-radius: 8px; border: 1px solid #bae6fd; text-align: center; margin-bottom: 10px; }
-    .result-val { font-size: 24px; font-weight: 800; color: #0c4a6e; }
+    .block-container { padding-top: 3rem !important; padding-bottom: 2rem !important; }
+    .stNumberInput, .stSelectbox, .stButton { margin-bottom: 5px !important; }
+    div[data-testid="column"] { align-items: end; }
+    .result-card {
+        background-color: #f0f9ff; border: 1px solid #bae6fd; padding: 10px; border-radius: 8px;
+        text-align: center; margin-bottom: 10px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    }
+    .result-value { font-size: 1.8rem; color: #0c4a6e; font-weight: 800; }
+    .stButton>button { font-weight: bold; border: 1px solid #ccc; width: 100%; }
     </style>
 """, unsafe_allow_html=True)
 
-# ==========================================
-# 2. DOSYA VE RESİM MOTORU
-# ==========================================
+# --- 2. DOSYA VE RESİM İŞLEMLERİ ---
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 ASSETS_DIR = os.path.join(BASE_DIR, "assets")
 
 def process_and_crop_image(filename):
-    """Resmi yükler, beyazları temizler ve otomatik kırpar."""
+    """Resmi yükler ve boşlukları kırparak Base64 yapar."""
     path = os.path.join(ASSETS_DIR, filename)
-    if not os.path.exists(path): return None
+    if not os.path.exists(path):
+        return None
     try:
         img = Image.open(path).convert("RGBA")
         datas = img.getdata()
         newData = []
-        # Beyaz temizleme (Toleranslı)
         for item in datas:
-            if item[0] > 230 and item[1] > 230 and item[2] > 230:
+            if item[0] > 240 and item[1] > 240 and item[2] > 240:
                 newData.append((255, 255, 255, 0))
             else:
                 newData.append(item)
         img.putdata(newData)
-        # Kırpma
         bbox = img.getbbox()
         if bbox: img = img.crop(bbox)
-        
         buffered = BytesIO()
         img.save(buffered, format="PNG")
         return "data:image/png;base64," + base64.b64encode(buffered.getvalue()).decode()
-    except Exception as e:
-        print(f"Resim hatası: {e}")
+    except:
         return None
 
-# ==========================================
-# 3. VERİTABANI
-# ==========================================
+# --- 3. KALIP VERİTABANI ---
 TOOL_DB = {
+    "holder": {"filename": "holder.png", "width_mm": 60.0, "height_mm": 60.0},
     "punches": {
-        "Gooseneck (Deve Boynu)": {"file": "punch_gooseneck.png", "w": 80.0, "h": 135.0},
-        "Standart (Balta)": {"file": "punch_std.png", "w": 40.0, "h": 135.0}
+        "Gooseneck (Deve Boynu)": {"filename": "punch_gooseneck.png", "height_mm": 135.0, "width_mm": 80.0},
+        "Standart (Balta)": {"filename": "punch_std.png", "height_mm": 135.0, "width_mm": 40.0}
     },
     "dies": {
-        "120x120 (Standart)": {"file": "die_v120.png", "w": 60.0, "h": 60.0, "v_open": 12.0}
-    },
-    "holder": {"file": "holder.png", "w": 60.0, "h": 60.0}
+        "120x120 (Standart)": {"filename": "die_v120.png", "width_mm": 60.0, "height_mm": 60.0}
+    }
 }
 
-# ==========================================
-# 4. DURUM YÖNETİMİ (SESSION STATE)
-# ==========================================
+# --- 4. HAFIZA ---
 if "bending_data" not in st.session_state:
-    st.session_state.bending_data = {
-        "lengths": [100.0, 100.0], 
-        "angles": [90.0],
-        "dirs": ["UP"]
-    }
+    st.session_state.bending_data = {"lengths": [100.0, 100.0], "angles": [90.0], "dirs": ["UP"]}
 
-# ==========================================
-# 5. GEOMETRİ HESAPLAMA MOTORU
-# ==========================================
+# --- 5. HESAPLAMA MOTORLARI ---
 def calculate_flat_len(lengths, angles, thickness):
-    """Açınım Boyu Hesabı"""
-    total = sum(lengths)
+    total_outer = sum(lengths)
     loss = 0.0
     for ang in angles:
         if ang < 180:
             dev = (180.0 - ang) / 90.0
-            loss += (2.0 * thickness) * dev * 0.2
-    return total - loss, total
+            loss += (2.0 * thickness) * dev
+    return total_outer - loss, total_outer
 
 def generate_solid_geometry(lengths, angles, dirs, thickness, inner_radius):
-    """Sacın katı model koordinatlarını oluşturur."""
     outer_radius = inner_radius + thickness
-    curr_x, curr_y, curr_ang = 0.0, 0.0, 0.0
     apex_x, apex_y = [0.0], [0.0]
-    
+    curr_x, curr_y, curr_ang = 0.0, 0.0, 0.0
     deviation_angles, directions = [], []
     
-    # 1. İskelet (Apex) Oluşturma
     for i in range(len(lengths)):
         L = lengths[i]
-        dev_deg = 0.0
-        d_val = 0
-        
+        dev_deg, d_val = 0.0, 0
         if i < len(angles):
-            target = angles[i]
-            d_str = dirs[i]
-            d_val = 1 if d_str == "UP" else -1
-            if target != 180:
-                dev_deg = (180.0 - target)
-        
-        curr_x += L * np.cos(curr_ang)
-        curr_y += L * np.sin(curr_ang)
-        apex_x.append(curr_x)
-        apex_y.append(curr_y)
-        
-        if dev_deg != 0:
-            curr_ang += np.radians(dev_deg) * d_val
-            
-        deviation_angles.append(dev_deg)
-        directions.append(d_val)
+            u_ang = angles[i]
+            d_val = 1 if dirs[i] == "UP" else -1
+            dev_deg = (180.0 - u_ang) if u_ang != 180 else 0.0
+        curr_x += L * np.cos(curr_ang); curr_y += L * np.sin(curr_ang)
+        apex_x.append(curr_x); apex_y.append(curr_y)
+        if dev_deg != 0: curr_ang += np.radians(dev_deg) * d_val
+        deviation_angles.append(dev_deg); directions.append(d_val)
 
-    # 2. Kalınlık Verme (Solid)
+    top_x, top_y = [0.0], [thickness]
+    bot_x, bot_y = [0.0], [0.0]
     curr_px, curr_py, curr_da = 0.0, thickness, 0.0
-    
-    # Basit Setback
-    setbacks = [0.0]
-    dev_rads = []
+    setbacks, dev_rads = [0.0], []
     for deg in deviation_angles:
         rv = np.radians(deg)
         sb = outer_radius * np.tan(rv / 2) if deg != 0 else 0.0
-        setbacks.append(sb)
-        dev_rads.append(rv)
+        setbacks.append(sb); dev_rads.append(rv)
     setbacks.append(0.0)
     
-    centers = []
-    top_x = [0.0]; top_y = [thickness]
-    bot_x = [0.0]; bot_y = [0.0]
-
+    bend_centers = []
     for i in range(len(lengths)):
         flat_len = max(0.0, lengths[i] - setbacks[i] - setbacks[i+1])
+        dx = flat_len * np.cos(curr_da); dy = flat_len * np.sin(curr_da)
+        nx, ny = np.sin(curr_da), -np.cos(curr_da)
+        top_x.append(curr_px + dx); top_y.append(curr_py + dy)
+        bot_x.append(curr_px + dx + nx*thickness); bot_y.append(curr_py + dy + ny*thickness)
         
-        dx = flat_len * np.cos(curr_da)
-        dy = flat_len * np.sin(curr_da)
-        
-        ep_top_x = curr_px + dx
-        ep_top_y = curr_py + dy
-        
-        top_x.append(ep_top_x)
-        top_y.append(ep_top_y)
-        
-        # Alt yüzey noktası (Kalınlık yönünde)
-        bx = ep_top_x + np.sin(curr_da) * thickness
-        by = ep_top_y - np.cos(curr_da) * thickness
-        bot_x.append(bx)
-        bot_y.append(by)
-        
-        # Büküm Merkezi Kaydı
         if i < len(angles):
-            centers.append({
-                'x': ep_top_x, 
-                'y': ep_top_y, 
-                'angle': curr_da
-            })
-            
-        curr_px, curr_py = ep_top_x, ep_top_y
+            bend_centers.append({'x': curr_px + dx, 'y': curr_py + dy, 'angle_cumulative': curr_da})
+        curr_px += dx; curr_py += dy
         
-        # Açıyı güncelle (Radius çizimini basitleştirip köşe dönüşü yapıyoruz)
         if i < len(angles) and deviation_angles[i] > 0:
-            dev = dev_rads[i]
-            d_val = directions[i]
+            dev = dev_rads[i]; d_val = directions[i]
+            if d_val == 1:
+                cx = curr_px - nx * inner_radius; cy = curr_py - ny * inner_radius
+                r_t, r_b = inner_radius, outer_radius
+                sa, ea = curr_da - np.pi/2, curr_da - np.pi/2 + dev
+            else:
+                cx = curr_px + nx * outer_radius; cy = curr_py + ny * outer_radius
+                r_t, r_b = outer_radius, inner_radius
+                sa, ea = curr_da + np.pi/2, curr_da + np.pi/2 - dev
+            theta = np.linspace(sa, ea, 10)
+            top_x.extend(cx + r_t * np.cos(theta)); top_y.extend(cy + r_t * np.sin(theta))
+            bot_x.extend(cx + r_b * np.cos(theta)); bot_y.extend(cy + r_b * np.sin(theta))
+            curr_px, curr_py = top_x[-1], top_y[-1]
             curr_da += dev * d_val
 
-    solid_x = top_x + bot_x[::-1] + [top_x[0]]
-    solid_y = top_y + bot_y[::-1] + [top_y[0]]
-    
-    return solid_x, solid_y, apex_x, apex_y, centers
+    final_x = top_x + bot_x[::-1] + [top_x[0]]
+    final_y = top_y + bot_y[::-1] + [top_y[0]]
+    return final_x, final_y, apex_x, apex_y, directions, bend_centers
 
-# ==========================================
-# 6. SİMÜLASYON HİZALAMA MOTORU (DÜZELTİLDİ)
-# ==========================================
+# --- 6. HİZALAMA MOTORU (ORİJİNAL SAĞLAM VERSİYON) ---
 def align_geometry_to_bend(x_pts, y_pts, center_x, center_y, angle_cum, bend_angle, bend_dir, thickness):
-    """
-    Parçayı büküm merkezine hizalar.
-    Eğer 'UP' ise parçayı fiziksel olarak ters çevirir (Mirror).
-    """
-    # 1. Parçayı orijine taşı
-    new_x = np.array(x_pts) - center_x
-    new_y = np.array(y_pts) - center_y
+    # 1. Geometriyi merkeze taşı
+    new_x = [x - center_x for x in x_pts]
+    new_y = [y - center_y for y in y_pts]
     
-    is_flipped = False
+    # 2. Döndürme Açısı (SİMETRİK V SAĞLAYAN ORİJİNAL FORMÜL)
+    rotation_offset = np.radians(180 - bend_angle) / 2.0
     
-    # --- FLIP MANTIĞI ---
-    # Eğer büküm UP ise, Y eksenini aynala.
-    # Bu, parçayı ters çevirir. Giriş açısı da (slope) tersine döner.
     if bend_dir == "UP":
-        new_y = -new_y        
-        angle_cum = -angle_cum 
-        is_flipped = True
-    
-    # 2. ROTASYON (V Kalıbına Oturtma)
-    # Simetrik V oluşması için gereken açı farkı
-    deviation_rad = np.radians(180.0 - bend_angle)
-    
-    # -angle_cum -> Parçayı yatay yapar.
-    # + deviation/2 -> Kanatları eşit kaldırır.
-    rotation = -angle_cum + (deviation_rad / 2.0)
-    
-    cos_t = np.cos(rotation)
-    sin_t = np.sin(rotation)
-    
-    # Döndür
-    rotated_x = new_x * cos_t - new_y * sin_t
-    rotated_y = new_x * sin_t + new_y * cos_t
-    
-    # 3. YÜKSEKLİK AYARI (OFFSET)
-    # Sacın alt yüzeyinin 0'a (Kalıp üstüne) oturması için.
-    # Nötr eksenden hesapladığımız için thickness/2 kadar yukarı kaldırıyoruz.
-    final_y = rotated_y + (thickness / 2.0)
+        rotation = -angle_cum - rotation_offset
+    else:
+        rotation = -angle_cum + rotation_offset
         
-    return rotated_x.tolist(), final_y.tolist(), is_flipped
+    cos_t, sin_t = np.cos(rotation), np.sin(rotation)
+    rotated_x, rotated_y = [], []
+    for i in range(len(new_x)):
+        rx = new_x[i] * cos_t - new_y[i] * sin_t
+        ry = new_x[i] * sin_t + new_y[i] * cos_t
+        rotated_x.append(rx); rotated_y.append(ry + thickness/2)
+        
+    return rotated_x, rotated_y
 
 def add_smart_dims(fig, px, py, lengths):
-    """Teknik resim üzerine ölçü oku ekler."""
-    dim_offset = 40.0
+    dim_offset = 60.0
     for i in range(len(lengths)):
-        if i >= len(px)-1: break
-        p1 = np.array([px[i], py[i]])
-        p2 = np.array([px[i+1], py[i+1]])
-        
+        p1 = np.array([px[i], py[i]]); p2 = np.array([px[i+1], py[i+1]])
         vec = p2 - p1
-        length = np.linalg.norm(vec)
-        if length < 0.1: continue
-        
-        u = vec / length
+        if np.linalg.norm(vec) < 0.1: continue
+        u = vec / np.linalg.norm(vec)
         normal = np.array([u[1], -u[0]])
-        
-        d1 = p1 + normal * dim_offset
-        d2 = p2 + normal * dim_offset
-        mid = (d1+d2)/2
-        
-        fig.add_trace(go.Scatter(
-            x=[p1[0], d1[0], None, p2[0], d2[0]], 
-            y=[p1[1], d1[1], None, p2[1], d2[1]], 
-            mode='lines', line=dict(color='gray', width=1, dash='dot'), hoverinfo='skip'
-        ))
-        
-        fig.add_annotation(
-            x=mid[0], y=mid[1], text=f"<b>{lengths[i]:.1f}</b>",
-            showarrow=False, font=dict(color="red", size=12), bgcolor="white"
-        )
+        d1 = p1 + normal * dim_offset; d2 = p2 + normal * dim_offset
+        mid = (d1 + d2) / 2
+        fig.add_trace(go.Scatter(x=[p1[0], d1[0], None, p2[0], d2[0]], y=[p1[1], d1[1], None, p2[1], d2[1]], mode='lines', line=dict(color='gray', width=1, dash='dot'), hoverinfo='skip'))
+        fig.add_trace(go.Scatter(x=[d1[0], d2[0]], y=[d1[1], d2[1]], mode='lines+markers', marker=dict(symbol='arrow', size=8, angleref='previous', color='black'), line=dict(color='black'), hoverinfo='skip'))
+        fig.add_annotation(x=mid[0], y=mid[1], text=f"<b>{lengths[i]:.1f}</b>", showarrow=False, font=dict(color="#B22222", size=12), bgcolor="white")
 
-# ==========================================
-# 7. SIDEBAR (KONTROL PANELİ)
-# ==========================================
+# --- 7. SIDEBAR ---
 with st.sidebar:
     st.header("⚙️ Ayarlar")
-    
-    # Dosya Kontrol
-    if os.path.exists(ASSETS_DIR):
-        st.success(f"Sistem Hazır ({len(os.listdir(ASSETS_DIR))} dosya)")
-    else:
-        st.error("Assets Klasörü Bulunamadı!")
+    with st.expander("🛠️ Dosya Durumu", expanded=False):
+        if os.path.exists(ASSETS_DIR):
+            st.success(f"Assets OK ({len(os.listdir(ASSETS_DIR))} dosya)")
+        else:
+            st.error("Assets YOK!")
 
     sel_punch = st.selectbox("Üst Bıçak", list(TOOL_DB["punches"].keys()))
     sel_die = st.selectbox("Alt Kalıp", list(TOOL_DB["dies"].keys()))
     
     c1, c2 = st.columns(2)
-    th = c1.number_input("Kalınlık (mm)", 0.1, 10.0, 2.0, 0.1)
-    rad = c2.number_input("Radius (mm)", 0.1, 10.0, 1.0, 0.1)
+    th = c1.number_input("Kalınlık (mm)", min_value=0.1, value=2.0, step=0.1, format="%.2f")
+    rad = c2.number_input("Radius (mm)", min_value=0.5, value=0.8, step=0.1, format="%.2f")
     
-    st.divider()
-    
-    # Butonlar
-    col_add, col_del = st.columns(2)
-    if col_add.button("➕ EKLE"):
-        st.session_state.bending_data["lengths"].append(50.0)
-        st.session_state.bending_data["angles"].append(90.0)
-        st.session_state.bending_data["dirs"].append("UP")
-        st.rerun()
-        
-    if col_del.button("🗑️ SİL"):
-        if len(st.session_state.bending_data["angles"]) > 0:
-            st.session_state.bending_data["lengths"].pop()
-            st.session_state.bending_data["angles"].pop()
-            st.session_state.bending_data["dirs"].pop()
-            st.rerun()
-    
-    st.divider()
-    st.subheader("Büküm Adımları")
-    
-    st.session_state.bending_data["lengths"][0] = st.number_input(
-        "L0 (Başlangıç)", value=st.session_state.bending_data["lengths"][0], key="l0"
-    )
-    
-    # Dinamik Liste
+    st.markdown("---")
+    st.session_state.bending_data["lengths"][0] = st.number_input("L0 (mm)", value=float(st.session_state.bending_data["lengths"][0]), step=0.1, key="l0", format="%.2f")
     for i in range(len(st.session_state.bending_data["angles"])):
-        with st.container():
-            st.markdown(f"**{i+1}. Büküm**")
-            c_l, c_a, c_d = st.columns([1.2, 1, 1.2])
-            
-            st.session_state.bending_data["lengths"][i+1] = c_l.number_input(
-                f"L{i+1}", value=st.session_state.bending_data["lengths"][i+1], key=f"l{i+1}"
-            )
-            st.session_state.bending_data["angles"][i] = c_a.number_input(
-                f"A{i+1}", value=st.session_state.bending_data["angles"][i], key=f"a{i}"
-            )
-            
-            curr_dir = st.session_state.bending_data["dirs"][i]
-            idx = 0 if curr_dir == "UP" else 1
-            new_dir = c_d.selectbox(f"Yön{i+1}", ["UP", "DOWN"], index=idx, key=f"d{i}")
-            st.session_state.bending_data["dirs"][i] = new_dir
+        st.markdown(f"**{i+1}. Büküm**")
+        cl, ca, cd = st.columns([1.2, 1, 1.2])
+        st.session_state.bending_data["lengths"][i+1] = cl.number_input("L (mm)", value=float(st.session_state.bending_data["lengths"][i+1]), step=0.1, key=f"l{i+1}", format="%.2f")
+        st.session_state.bending_data["angles"][i] = ca.number_input("A (°)", value=float(st.session_state.bending_data["angles"][i]), step=1.0, max_value=180.0, key=f"a{i}", format="%.2f")
+        idx = 0 if st.session_state.bending_data["dirs"][i]=="UP" else 1
+        st.session_state.bending_data["dirs"][i] = cd.selectbox("Yön", ["UP", "DOWN"], index=idx, key=f"d{i}")
+    
+    st.markdown("---")
+    if st.button("➕ EKLE"): st.session_state.bending_data["lengths"].append(50.0); st.session_state.bending_data["angles"].append(90.0); st.session_state.bending_data["dirs"].append("UP"); st.rerun()
+    if st.button("🗑️ SİL"): st.session_state.bending_data["lengths"].pop(); st.session_state.bending_data["angles"].pop(); st.session_state.dirs.pop(); st.rerun()
 
-# ==========================================
-# 8. ANA EKRAN
-# ==========================================
+# --- 8. ANA EKRAN ---
 cur_l = st.session_state.bending_data["lengths"]
 cur_a = st.session_state.bending_data["angles"]
 cur_d = st.session_state.bending_data["dirs"]
-
-# Hesaplamalar
-flat_len, total_outer = calculate_flat_len(cur_l, cur_a, th)
-tech_x, tech_y, apex_x, apex_y, _ = generate_solid_geometry(cur_l, cur_a, cur_d, th, rad)
+flat, total = calculate_flat_len(cur_l, cur_a, th)
+sx, sy, ax, ay, drs, centers = generate_solid_geometry(cur_l, cur_a, cur_d, th, rad)
 
 tab1, tab2 = st.tabs(["📐 Teknik Resim", "🎬 Makine Simülasyonu"])
 
 with tab1:
-    st.markdown(f"""
-        <div class="result-card">
-            <div class="result-val">AÇINIM: {flat_len:.2f} mm</div>
-            <small style="color:gray">Dış Toplam: {total_outer:.1f} mm</small>
-        </div>
-    """, unsafe_allow_html=True)
-    
-    fig_tech = go.Figure()
-    fig_tech.add_trace(go.Scatter(x=tech_x, y=tech_y, fill='toself', fillcolor='#cbd5e1', line=dict(color='#334155', width=2), name='Parça'))
-    add_smart_dims(fig_tech, apex_x, apex_y, cur_l)
-    
-    fig_tech.update_layout(height=500, plot_bgcolor="white", yaxis=dict(scaleanchor="x", scaleratio=1, visible=False), xaxis=dict(visible=False), margin=dict(l=10, r=10, t=10, b=10))
-    st.plotly_chart(fig_tech, use_container_width=True)
+    st.markdown(f"""<div class="result-card"><div class="result-value">AÇINIM: {flat:.2f} mm</div><small>Dış Toplam: {total:.1f}</small></div>""", unsafe_allow_html=True)
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=sx, y=sy, fill='toself', fillcolor='rgba(70, 130, 180, 0.4)', line=dict(color='#004a80', width=2), mode='lines'))
+    add_smart_dims(fig, ax, ay, cur_l)
+    fig.update_layout(height=600, plot_bgcolor="white", yaxis=dict(scaleanchor="x", scaleratio=1, visible=False), xaxis=dict(visible=False), margin=dict(l=20, r=20, t=20, b=20))
+    st.plotly_chart(fig, use_container_width=True)
 
 with tab2:
     if len(cur_a) == 0:
         st.info("Simülasyon için büküm ekleyin.")
     else:
-        c_sim1, c_sim2 = st.columns([3, 1])
-        steps = ["Hazırlık"] + [f"{i+1}. Büküm" for i in range(len(cur_a))]
-        
-        if "sim_idx" not in st.session_state: st.session_state.sim_idx = 0
         if "sim_active" not in st.session_state: st.session_state.sim_active = False
+        if "sim_step_idx" not in st.session_state: st.session_state.sim_step_idx = 0
         
-        sel_step = c_sim1.selectbox("Adım", steps, index=st.session_state.sim_idx)
-        st.session_state.sim_idx = steps.index(sel_step)
+        c_anim, c_sel, _ = st.columns([1, 2, 2])
+        step_opts = ["Hazırlık"] + [f"{i+1}. Büküm" for i in range(len(cur_a))]
+        curr_step = c_sel.selectbox("Adım", step_opts, index=st.session_state.sim_step_idx)
+        st.session_state.sim_step_idx = step_opts.index(curr_step)
         
-        if c_sim2.button("▶️ OYNAT"):
+        if c_anim.button("▶️ OYNAT"):
             st.session_state.sim_active = True
         
-        # Animasyon Kareleri
-        frames = np.linspace(0, 1, 15) if st.session_state.sim_active else [0.0]
-        if st.session_state.sim_idx == 0: frames = [0.0]
+        # --- DÜZELTME: VARSAYILAN KARE 0.0 (BAŞLANGIÇ) OLMALI ---
+        stroke_frames = np.linspace(0, 1, 20) if st.session_state.sim_active else [0.0]
+        if st.session_state.sim_step_idx == 0: stroke_frames = [0.0]
+
+        sim_placeholder = st.empty()
         
-        placeholder = st.empty()
-        
-        for fr in frames:
+        for fr in stroke_frames:
+            # Stroke hareketi
+            current_stroke_y = (1.0 - fr) * 200.0 + th
+            
+            # Açı interpolasyonu
+            temp_angs = [180.0] * len(cur_a)
+            curr_idx = st.session_state.sim_step_idx
+            
+            for k in range(len(cur_a)):
+                if k < curr_idx - 1: temp_angs[k] = cur_a[k]
+                elif k == curr_idx - 1: 
+                    target = cur_a[k]
+                    temp_angs[k] = 180.0 - (180.0 - target) * fr
+                else: temp_angs[k] = 180.0
+            
+            # Geometri Oluşturma
+            s_x, s_y, _, _, _, s_centers = generate_solid_geometry(cur_l, temp_angs, cur_d, th, rad)
+            
+            # Hizalama
+            if curr_idx > 0:
+                act_idx = curr_idx - 1
+                c_dat = s_centers[act_idx]
+                fs_x, fs_y = align_geometry_to_bend(s_x, s_y, c_dat['x'], c_dat['y'], c_dat['angle_cumulative'], temp_angs[act_idx], cur_d[act_idx], th)
+            else:
+                 c_dat = s_centers[0]
+                 fs_x, fs_y = [x - c_dat['x'] for x in s_x], [y - c_dat['y'] for y in s_y]
+            
+            f_sim = go.Figure()
+            f_sim.add_trace(go.Scatter(x=fs_x, y=fs_y, fill='toself', fillcolor='rgba(220, 38, 38, 0.9)', line=dict(color='#991b1b', width=3), name='Sac'))
+            
+            # Resimler (Otomatik Kırpılmış)
             try:
-                # 1. Anlık Açıları Hesapla
-                temp_angs = []
-                idx = st.session_state.sim_idx
-                active_bend = idx - 1
+                die_d = TOOL_DB["dies"][sel_die]
+                die_src = process_and_crop_image(die_d["filename"])
+                if die_src: 
+                    f_sim.add_layout_image(dict(source=die_src, x=0, y=0, sizex=die_d["width_mm"], sizey=die_d["height_mm"], xanchor="center", yanchor="top", layer="below", xref="x", yref="y"))
                 
-                for k in range(len(cur_a)):
-                    if idx == 0: # Hazırlık
-                        temp_angs.append(180.0)
-                    elif k < active_bend: # Geçmiş
-                        temp_angs.append(cur_a[k])
-                    elif k == active_bend: # Aktif
-                        # 180'den Hedefe doğru git
-                        target = cur_a[k]
-                        val = 180.0 - (180.0 - target) * fr
-                        temp_angs.append(val)
-                    else: # Gelecek
-                        temp_angs.append(180.0)
+                punch_d = TOOL_DB["punches"][sel_punch]
+                punch_src = process_and_crop_image(punch_d["filename"])
+                if punch_src: 
+                    f_sim.add_layout_image(dict(source=punch_src, x=0, y=current_stroke_y, sizex=punch_d["width_mm"], sizey=punch_d["height_mm"], xanchor="center", yanchor="bottom", layer="below", xref="x", yref="y"))
                 
-                # 2. Geometriyi Oluştur
-                s_x, s_y, _, _, centers = generate_solid_geometry(cur_l, temp_angs, cur_d, th, rad)
-                
-                # 3. Hizalama ve Flip
-                is_flipped = False
-                
-                if idx > 0:
-                    c_dat = centers[active_bend]
-                    b_ang = temp_angs[active_bend]
-                    b_dir = cur_d[active_bend]
-                    
-                    fs_x, fs_y, is_flipped = align_geometry_to_bend(
-                        s_x, s_y, c_dat['x'], c_dat['y'], c_dat['angle'], b_ang, b_dir, th
-                    )
-                else:
-                    # Hazırlık (Ortala)
-                    mid = len(s_x) // 2
-                    offset = s_x[mid]
-                    fs_x = [x - offset for x in s_x]
-                    fs_y = s_y
-                
-                # 4. Çizim
-                f_sim = go.Figure()
-                
-                # Sac
-                f_sim.add_trace(go.Scatter(
-                    x=fs_x, y=fs_y, fill='toself', fillcolor='rgba(185, 28, 28, 0.9)', 
-                    line=dict(color='#991b1b', width=3), name='Sac'
-                ))
-                
-                # Makine Parçaları
-                stroke_y = (1.0 - fr) * 150.0 + th # Basit stroke hareketi
-                if idx == 0: stroke_y = 150.0
+                hold_d = TOOL_DB["holder"]
+                hold_src = process_and_crop_image(hold_d["filename"])
+                if hold_src: 
+                    f_sim.add_layout_image(dict(source=hold_src, x=0, y=current_stroke_y + punch_d["height_mm"], sizex=hold_d["width_mm"], sizey=hold_d["height_mm"], xanchor="center", yanchor="bottom", layer="below", xref="x", yref="y"))
+            except: pass
 
-                die_info = TOOL_DB["dies"][sel_die]
-                d_src = process_and_crop_image(die_info["file"])
-                if d_src:
-                    f_sim.add_layout_image(source=d_src, x=0, y=0, sizex=die_info["w"], sizey=die_info["h"], xanchor="center", yanchor="top", layer="below", xref="x", yref="y")
-                
-                punch_info = TOOL_DB["punches"][sel_punch]
-                p_src = process_and_crop_image(punch_info["file"])
-                if p_src:
-                    f_sim.add_layout_image(source=p_src, x=0, y=stroke_y, sizex=punch_info["w"], sizey=punch_info["h"], xanchor="center", yanchor="bottom", layer="below", xref="x", yref="y")
-                    
-                hold_info = TOOL_DB["holder"]
-                h_src = process_and_crop_image(hold_info["file"])
-                if h_src:
-                    f_sim.add_layout_image(source=h_src, x=0, y=stroke_y + punch_info["h"], sizex=hold_info["w"], sizey=hold_info["h"], xanchor="center", yanchor="bottom", layer="below", xref="x", yref="y")
-                
-                # Flip Uyarısı
-                if is_flipped:
-                    f_sim.add_annotation(x=0, y=100, text="🔄 PARÇAYI ÇEVİR (FLIP)", font=dict(size=18, color="blue"), bgcolor="rgba(255,255,255,0.8)", showarrow=False)
-
-                f_sim.update_layout(
-                    title=dict(text=f"Adım: {idx}", x=0.5), height=600, plot_bgcolor="#f8fafc",
-                    xaxis=dict(visible=False, range=[-200, 200], fixedrange=True),
-                    yaxis=dict(visible=False, range=[-100, 300], fixedrange=True, scaleanchor="x", scaleratio=1),
-                    showlegend=False, margin=dict(l=0, r=0, t=40, b=0)
-                )
-                placeholder.plotly_chart(f_sim, use_container_width=True)
-                
-                if st.session_state.sim_active: time.sleep(0.05)
-                
-            except Exception as e:
-                placeholder.error(f"Simülasyon Hatası: {e}")
-                
+            info = "Hazırlık" if curr_idx == 0 else f"Adım {curr_idx}"
+            f_sim.update_layout(title=dict(text=info, x=0.5), height=600, plot_bgcolor="#f1f5f9", xaxis=dict(visible=False, range=[-150, 150], fixedrange=True), yaxis=dict(visible=False, range=[-100, 250], fixedrange=True, scaleanchor="x", scaleratio=1), showlegend=False, margin=dict(l=0, r=0, t=40, b=0))
+            sim_placeholder.plotly_chart(f_sim, use_container_width=True)
+            if st.session_state.sim_active: time.sleep(0.05)
+            
         st.session_state.sim_active = False
