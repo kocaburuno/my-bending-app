@@ -1,62 +1,35 @@
 import streamlit as st
 import plotly.graph_objects as go
 import numpy as np
-import pandas as pd
+import time
 
-# --- SAYFA AYARLARI ---
+# --- 1. SAYFA VE STİL AYARLARI ---
 st.set_page_config(page_title="Büküm Simülasyonu", layout="wide", page_icon="📐", initial_sidebar_state="expanded")
 
-# --- CSS: HATA DÜZELTME & HİZALAMA ---
 st.markdown("""
     <style>
-    .block-container {
-        padding-top: 5rem !important;
-        padding-bottom: 2rem !important;
-        padding-left: 1rem !important;
-        padding-right: 1rem !important;
-    }
-    [data-testid="stSidebar"] .block-container {
-        padding-top: 2rem; 
-        padding-bottom: 2rem;
-    }
-    .stNumberInput, .stSelectbox, .stButton {
-        margin-bottom: 5px !important; 
-        margin-top: 0px !important;
-    }
-    div[data-testid="column"] {
-        align-items: end;
-    }
-    .compact-label {
-        font-size: 0.85rem; 
-        font-weight: 700; 
-        color: #31333F; 
-        margin-bottom: 4px; 
-        display: block;
-        line-height: 1.2;
-    }
-    .stButton>button {
-        height: 2.4rem; 
-        line-height: 1; 
-        font-weight: bold; 
-        border: 1px solid #ccc;
-        width: 100%;
-    }
+    /* Düzen Ayarları */
+    .block-container { padding-top: 4rem !important; padding-bottom: 2rem !important; }
+    [data-testid="stSidebar"] .block-container { padding-top: 2rem; }
+    .stNumberInput, .stSelectbox, .stButton { margin-bottom: 5px !important; margin-top: 0px !important; }
+    div[data-testid="column"] { align-items: end; }
+    
+    /* Etiketler ve Kartlar */
+    .compact-label { font-size: 0.85rem; font-weight: 700; color: #31333F; margin-bottom: 4px; display: block; }
     .result-card {
-        background-color: #f0f9ff; 
-        border: 1px solid #bae6fd;
-        padding: 15px;
-        border-radius: 8px;
-        text-align: center;
-        margin-bottom: 20px;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        background-color: #f0f9ff; border: 1px solid #bae6fd; padding: 15px; border-radius: 8px;
+        text-align: center; margin-bottom: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);
     }
-    .result-title { font-size: 0.9em; color: #0284c7; font-weight: bold; letter-spacing: 0.5px; }
+    .result-title { font-size: 0.9em; color: #0284c7; font-weight: bold; }
     .result-value { font-size: 2.2em; color: #0c4a6e; font-weight: 800; margin: 5px 0; }
     .result-sub { font-size: 0.85em; color: #64748b; }
+    
+    /* Buton */
+    .stButton>button { height: 2.4rem; font-weight: bold; border: 1px solid #ccc; width: 100%; }
     </style>
 """, unsafe_allow_html=True)
 
-# --- STATE YÖNETİMİ ---
+# --- 2. HAFIZA (STATE) YÖNETİMİ ---
 if "lengths" not in st.session_state:
     st.session_state.lengths = [100.0, 100.0] 
     st.session_state.angles = [90.0]
@@ -66,24 +39,29 @@ def load_preset(new_lengths, new_angles, new_dirs):
     st.session_state.lengths = new_lengths
     st.session_state.angles = new_angles
     st.session_state.dirs = new_dirs
-    if len(new_lengths) > 0: st.session_state["len_0"] = new_lengths[0]
+    # Değerleri float'a zorla
+    if len(new_lengths) > 0: st.session_state["len_0"] = float(new_lengths[0])
     for i in range(len(new_angles)):
-        st.session_state[f"len_{i+1}"] = new_lengths[i+1]
-        st.session_state[f"ang_{i}"] = new_angles[i]
+        st.session_state[f"len_{i+1}"] = float(new_lengths[i+1])
+        st.session_state[f"ang_{i}"] = float(new_angles[i])
         st.session_state[f"dir_{i}"] = new_dirs[i]
 
-# --- BASİT HESAPLAMA MOTORU ---
-def calculate_flat_pattern(lengths, angles, thickness, radius):
+# --- 3. HESAPLAMA MOTORU ---
+def calculate_flat_pattern(lengths, angles, thickness):
     total_outer = sum(lengths)
     total_deduction = 0
     for ang in angles:
         if ang >= 180: continue
+        # Basit Kural: 90 derecede 2*T kadar düş (veya T, tercihe göre ayarlanabilir)
+        # Burada önceki isteğinize sadık kalarak 90 derecede T kadar düşürüyorum:
         deviation = (180 - ang) / 90.0
-        total_deduction += (2 * thickness) * deviation
+        # 90 derecede 1xKalınlık düşümü (Daha yaygın basit hesap):
+        total_deduction += (1.0 * thickness) * deviation
+    
     flat_length = total_outer - total_deduction
     return flat_length, total_outer
 
-# --- GRAFİK MOTORU ---
+# --- 4. GRAFİK VE KATI MODEL MOTORU ---
 def generate_solid_and_dimensions(lengths, angles, dirs, thickness, inner_radius):
     outer_radius = inner_radius + thickness
     apex_x, apex_y = [0], [0]
@@ -91,42 +69,45 @@ def generate_solid_and_dimensions(lengths, angles, dirs, thickness, inner_radius
     curr_ang = 0 
     deviation_angles, directions = [], []
     
+    # --- 1. Teorik Hat (Apex) ---
     for i in range(len(lengths)):
         length = lengths[i]
         if i < len(angles):
             user_angle = angles[i]
             d_str = dirs[i]
             dir_val = 1 if d_str == "UP" else -1
-            if user_angle == 180: dev_deg, dir_val = 0, 0
-            else: dev_deg = 180 - user_angle
+            dev_deg = (180 - user_angle) if user_angle != 180 else 0
         else: dev_deg, dir_val = 0, 0
         
         dx = length * np.cos(curr_ang)
         dy = length * np.sin(curr_ang)
         curr_x += dx; curr_y += dy
         apex_x.append(curr_x); apex_y.append(curr_y)
-        if dev_deg != 0:
-            curr_ang += np.radians(dev_deg) * dir_val
+        
+        if dev_deg != 0: curr_ang += np.radians(dev_deg) * dir_val
         deviation_angles.append(dev_deg)
         directions.append(dir_val)
 
-    top_x, top_y = [0], [0]
-    bot_x, bot_y = [0], [-thickness]
-    curr_pos_x, curr_pos_y = 0, 0
+    # --- 2. Katı Model ---
+    # Sacı Y ekseninde kalınlık kadar yukarı ötele (Bottom yüzeyi 0'a otursun)
+    top_x, top_y = [0], [thickness]
+    bot_x, bot_y = [0], [0]
+    curr_pos_x, curr_pos_y = 0, thickness
     curr_dir_ang = 0
     
-    setbacks, deviation_radians = [0], []
+    setbacks, dev_rads = [0], []
     for deg in deviation_angles:
         if deg == 0: sb, rad_val = 0, 0
         else:
             rad_val = np.radians(deg)
             sb = outer_radius * np.tan(rad_val / 2)
         setbacks.append(sb)
-        deviation_radians.append(rad_val)
+        dev_rads.append(rad_val)
     setbacks.append(0)
     
     for i in range(len(lengths)):
         flat_len = max(0, lengths[i] - setbacks[i] - setbacks[i+1])
+        
         dx = flat_len * np.cos(curr_dir_ang)
         dy = flat_len * np.sin(curr_dir_ang)
         new_x = curr_pos_x + dx; new_y = curr_pos_y + dy
@@ -137,77 +118,67 @@ def generate_solid_and_dimensions(lengths, angles, dirs, thickness, inner_radius
         curr_pos_x, curr_pos_y = new_x, new_y
         
         if i < len(angles) and deviation_angles[i] > 0:
-            dev = deviation_radians[i]
+            dev = dev_rads[i]
             d_val = directions[i]
-            if d_val == 1:
+            if d_val == 1: # UP
                 cx = curr_pos_x - nx * inner_radius; cy = curr_pos_y - ny * inner_radius
                 r_t, r_b = inner_radius, outer_radius
                 start_a, end_a = curr_dir_ang - np.pi/2, curr_dir_ang - np.pi/2 + dev
-            else:
+            else: # DOWN
                 cx = curr_pos_x + nx * outer_radius; cy = curr_pos_y + ny * outer_radius
                 r_t, r_b = outer_radius, inner_radius
                 start_a, end_a = curr_dir_ang + np.pi/2, curr_dir_ang + np.pi/2 - dev
             
-            theta = np.linspace(start_a, end_a, 20)
+            theta = np.linspace(start_a, end_a, 15)
             top_x.extend(cx + r_t * np.cos(theta)); top_y.extend(cy + r_t * np.sin(theta))
             bot_x.extend(cx + r_b * np.cos(theta)); bot_y.extend(cy + r_b * np.sin(theta))
             curr_pos_x, curr_pos_y = top_x[-1], top_y[-1]
             curr_dir_ang += dev * d_val
 
-    return top_x + bot_x[::-1] + [top_x[0]], top_y + bot_y[::-1] + [top_y[0]], apex_x, apex_y, directions
+    # Poligon Kapatma
+    final_x = top_x + bot_x[::-1] + [top_x[0]]
+    final_y = top_y + bot_y[::-1] + [top_y[0]]
+    
+    return final_x, final_y, apex_x, apex_y, directions
 
-# --- ÖLÇÜLENDİRME ---
+# --- 5. ÖLÇÜLENDİRME (SAĞ EL KURALI - ÇAKIŞMAZ) ---
 def add_dims(fig, apex_x, apex_y, directions, lengths, angles):
-    # KESİN ÇÖZÜM: Kümülatif açı takibi ile her kenarın 'dış' tarafını bulma
-    curr_abs_rad = 0 # Sacın o anki mutlak açısı
+    dim_offset = 60
     
     for i in range(len(lengths)):
         p1 = np.array([apex_x[i], apex_y[i]])
         p2 = np.array([apex_x[i+1], apex_y[i+1]])
         mid_p = (p1 + p2) / 2
-        
-        # Kenar vektörü
         vec = p2 - p1
         dist = np.linalg.norm(vec)
         if dist < 0.1: continue
-        unit = vec / dist
+        u = vec / dist
         
-        # Kenarın mutlak açısını bul (radyan)
-        edge_ang = np.arctan2(unit[1], unit[0])
+        # SAĞ EL KURALI: Gidiş yönünün sağına dik vektör (u_y, -u_x)
+        normal = np.array([u[1], -u[0]])
         
-        # Kenara dik normal (saat yönü tersi)
-        normal = np.array([-np.sin(edge_ang), np.cos(edge_ang)])
+        d1 = p1 + normal * dim_offset
+        d2 = p2 + normal * dim_offset
+        text_p = mid_p + normal * (dim_offset + 15)
         
-        # DIŞ TARAF TAYİNİ:
-        # İlk kenar (L1) sağa giderken dış taraf aşağıdır (-y)
-        # Diğer kenarlar için kümülatif büküm yönü belirleyicidir
-        if i == 0:
-            side = -1 
-        else:
-            # Önceki tüm bükümlerin toplam sapmasını hesapla
-            # Z formunda UP sonra DOWN gelirse tekrar başlangıç fazına döner
-            total_dev = sum(directions[:i]) # 1: UP (+), -1: DOWN (-)
-            # Eğer toplam sapma çift sayı veya 0 ise (L1, L3 gibi) side -1
-            # Eğer toplam sapma tek sayı ise (L2, L4 gibi) side değişir
-            # Ancak bu sadece 90 derece için geçerli. En garanti yol:
-            # Önceki bükümün mutlak yönüne göre normali tersle/düz tut
-            prev_bend_dir = directions[i-1]
-            if prev_bend_dir == 1: # UP
-                side = -1
-            else: # DOWN
-                side = 1
+        # Uzatma
+        fig.add_trace(go.Scatter(
+            x=[p1[0], d1[0], None, p2[0], d2[0]], y=[p1[1], d1[1], None, p2[1], d2[1]],
+            mode='lines', line=dict(color='rgba(150,150,150,0.5)', width=1, dash='dot'), hoverinfo='skip'
+        ))
+        # Ok
+        fig.add_trace(go.Scatter(
+            x=[d1[0], d2[0]], y=[d1[1], d2[1]],
+            mode='lines+markers', marker=dict(symbol='arrow', size=8, angleref="previous", color='black'),
+            line=dict(color='black', width=1.5), hoverinfo='skip'
+        ))
+        # Yazı
+        fig.add_annotation(
+            x=text_p[0], y=text_p[1], text=f"<b>{lengths[i]:.1f}</b>",
+            showarrow=False, font=dict(color="#B22222", size=13), bgcolor="rgba(255,255,255,0.8)"
+        )
 
-        offset = 50
-        dim_s = p1 + normal * offset * side
-        dim_e = p2 + normal * offset * side
-        label_p = mid_p + normal * (offset + 20) * side
-        
-        # Ölçü Çizgisi
-        fig.add_trace(go.Scatter(x=[p1[0], dim_s[0], None, p2[0], dim_e[0]], y=[p1[1], dim_s[1], None, p2[1], dim_e[1]], mode='lines', line=dict(color='#bdc3c7', width=1, dash='dot'), hoverinfo='skip', showlegend=False))
-        fig.add_trace(go.Scatter(x=[dim_s[0], dim_e[0]], y=[dim_s[1], dim_e[1]], mode='lines+markers', marker=dict(symbol='arrow', size=10, angleref='previous', color='#34495e'), line=dict(color='#34495e', width=1.5), hoverinfo='skip', showlegend=False))
-        fig.add_annotation(x=label_p[0], y=label_p[1], text=f"<b>{lengths[i]:.1f}</b>", showarrow=False, font=dict(color="#c0392b", size=14), bgcolor="rgba(255,255,255,0.9)")
-
-    # Açı ölçüleri
+    # Açı Ölçüleri
     curr_abs_ang = 0
     for i in range(len(angles)):
         if angles[i] == 180: continue
@@ -218,18 +189,23 @@ def add_dims(fig, apex_x, apex_y, directions, lengths, angles):
         bisector = curr_abs_ang + np.radians(dev_deg * d_val / 2) - (np.pi/2 * d_val)
         txt_x = corner[0] + 40 * np.cos(bisector)
         txt_y = corner[1] + 40 * np.sin(bisector)
-        fig.add_annotation(x=txt_x, y=txt_y, ax=corner[0], ay=corner[1], text=f"<b>{int(angles[i])}°</b>", showarrow=True, arrowhead=0, arrowwidth=1, arrowcolor='#999', font=dict(color="blue", size=11), bgcolor="white")
+        fig.add_annotation(
+            x=txt_x, y=txt_y, text=f"<b>{int(angles[i])}°</b>", 
+            showarrow=False, font=dict(color="blue", size=11), bgcolor="white"
+        )
         curr_abs_ang += np.radians(dev_deg * d_val)
 
-# --- SIDEBAR (SOL PANEL) ---
+# --- 6. SIDEBAR KONTROLLERİ ---
 with st.sidebar:
     st.markdown("### ⚙️ Sac ve Kalıp Ayarları")
     c1, c2 = st.columns(2)
     with c1:
         st.markdown('<span class="compact-label">Kalınlık</span>', unsafe_allow_html=True)
+        # HATA DÜZELTME: value, step float olmalı
         th = st.number_input("th_input", min_value=0.1, max_value=50.0, value=2.0, step=0.1, format="%.2f", label_visibility="collapsed")
     with c2:
         st.markdown('<span class="compact-label">Bıçak Radius</span>', unsafe_allow_html=True)
+        # HATA DÜZELTME: value, step float olmalı
         rad = st.number_input("rad_input", min_value=0.8, max_value=50.0, value=0.8, step=0.1, format="%.2f", label_visibility="collapsed")
 
     st.markdown("---")
@@ -243,6 +219,8 @@ with st.sidebar:
     st.markdown("---")
     st.markdown('<span class="compact-label" style="font-size:1em;">✏️ Ölçü Girişi</span>', unsafe_allow_html=True)
     st.markdown('<span class="compact-label" style="color:#0068C9; margin-top:10px;">1. Başlangıç Kenarı (mm)</span>', unsafe_allow_html=True)
+    
+    # Value float'a çevrildi
     st.session_state.lengths[0] = st.number_input("len_0", value=float(st.session_state.lengths[0]), min_value=1.0, step=0.1, label_visibility="collapsed")
 
     for i in range(len(st.session_state.angles)):
@@ -266,41 +244,31 @@ with st.sidebar:
     if c_del.button("🗑️ SİL"):
         if len(st.session_state.angles) > 0: st.session_state.lengths.pop(); st.session_state.angles.pop(); st.session_state.dirs.pop(); st.rerun()
 
-# --- ANA EKRAN ---
+# --- 7. ANA EKRAN ---
 tab1, tab2 = st.tabs(["📐 Tasarım ve Hesaplama", "🎬 Büküm Simülasyonu (Operatör)"])
 
 with tab1:
     sx, sy, ax, ay, drs = generate_solid_and_dimensions(st.session_state.lengths, st.session_state.angles, st.session_state.dirs, th, rad)
-    flat_len, total_outer = calculate_flat_pattern(st.session_state.lengths, st.session_state.angles, th, rad)
+    flat_len, total_outer = calculate_flat_pattern(st.session_state.lengths, st.session_state.angles, th)
 
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=sx, y=sy, fill='toself', fillcolor='rgba(70, 130, 180, 0.4)', line=dict(color='#004a80', width=2), mode='lines', hoverinfo='skip'))
-    # Ölçülendirmeyi tekrar ekle
-    add_dims(fig, ax, ay, drs, st.session_state.lengths, st.session_state.angles)
-
-    fig.update_layout(
-        height=600, 
-        dragmode=False, 
-        showlegend=False, 
-        hovermode=False,
-        xaxis=dict(showgrid=True, gridcolor='#f4f4f4', zeroline=False, visible=False, scaleanchor="y", fixedrange=True),
-        yaxis=dict(showgrid=True, gridcolor='#f4f4f4', zeroline=False, visible=False, fixedrange=True),
-        plot_bgcolor="white", 
-        margin=dict(l=10, r=10, t=10, b=10)
-    )
-
-    st.markdown("### 📐 Büküm Simülasyonu")
     st.markdown(f"""
     <div class="result-card">
         <div class="result-title">TOPLAM SAC AÇINIMI (LAZER KESİM ÖLÇÜSÜ)</div>
         <div class="result-value">{flat_len:.2f} mm</div>
-        <div class="result-sub">
-            Formül: (Dış Ölçüler Toplamı) - (Büküm Sayısı x 2 x Kalınlık)<br>
-            (Toplam Dış Ölçü: {total_outer:.1f} mm | Toplam Kayıp: -{total_outer - flat_len:.2f} mm)
-        </div>
+        <div class="result-sub">(Toplam Dış Ölçü: {total_outer:.1f} mm | Büküm Kayıpları: -{total_outer - flat_len:.2f} mm)</div>
     </div>
     """, unsafe_allow_html=True)
 
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=sx, y=sy, fill='toself', fillcolor='rgba(70, 130, 180, 0.4)', line=dict(color='#004a80', width=2), mode='lines', hoverinfo='skip'))
+    add_dims(fig, ax, ay, drs, st.session_state.lengths, st.session_state.angles)
+
+    fig.update_layout(
+        height=600, dragmode=False, showlegend=False, hovermode=False,
+        xaxis=dict(showgrid=True, gridcolor='#f4f4f4', zeroline=False, visible=False, scaleanchor="y", fixedrange=True),
+        yaxis=dict(showgrid=True, gridcolor='#f4f4f4', zeroline=False, visible=False, fixedrange=True),
+        plot_bgcolor="white", margin=dict(l=10, r=10, t=10, b=10)
+    )
     st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
 
 with tab2:
@@ -316,51 +284,61 @@ with tab2:
             if "anim_step" not in st.session_state: st.session_state.anim_step = 0
             import time
             placeholder = st.empty()
+            
             for s in range(st.session_state.anim_step, num_steps + 1):
                 st.session_state.anim_step = s
                 current_angles = [180.0] * num_steps
                 for i in range(s): current_angles[i] = st.session_state.angles[i]
+                
                 tsx, tsy, tax, tay, tdrs = generate_solid_and_dimensions(st.session_state.lengths, current_angles, st.session_state.dirs, th, rad)
                 
                 fig_anim = go.Figure()
                 off_x, off_y = 20, 20
-                tsx_back = [x + off_x for x in tsx]
-                tsy_back = [y + off_y for y in tsy]
+                tsx_back = [x + off_x for x in tsx]; tsy_back = [y + off_y for y in tsy]
+                
+                # 3D Efekt
                 for i in range(0, len(tsx)-1, 2):
                     fig_anim.add_trace(go.Scatter(x=[tsx[i], tsx_back[i], tsx_back[i+1], tsx[i+1]], y=[tsy[i], tsy_back[i], tsy_back[i+1], tsy[i+1]], fill='toself', fillcolor='rgba(50, 100, 150, 0.3)', line=dict(width=0), hoverinfo='skip'))
                 fig_anim.add_trace(go.Scatter(x=tsx_back, y=tsy_back, fill='toself', fillcolor='rgba(100, 150, 200, 0.2)', line=dict(color='#004a80', width=1)))
                 fig_anim.add_trace(go.Scatter(x=tsx, y=tsy, fill='toself', fillcolor='rgba(70, 130, 180, 0.7)', line=dict(color='#004a80', width=2)))
 
+                # Bıçak/Kalıp
                 if s > 0:
                     bx, by = tax[s], tay[s]
                     fig_anim.add_trace(go.Scatter(x=[bx-20, bx, bx+20], y=[by+40, by+5, by+40], fill='toself', fillcolor='rgba(150, 150, 150, 0.8)', line=dict(color='black', width=2)))
-                    fig_anim.add_trace(go.Scatter(x=[bx-30, bx-15, bx, bx+15, bx+30], y=[by-40, by-40, by-10, by-40, by-40], fill='toself', fillcolor='rgba(100, 100, 100, 0.8)', line=dict(color='#000', width=2)))
+                    fig_anim.add_trace(go.Scatter(x=[bx-30, bx-15, bx, bx+15, bx+30], y=[by-40, by-40, by-10, by-40, by-40], fill='toself', fillcolor='rgba(100, 100, 100, 0.8)', line=dict(color='black', width=2)))
 
                 fig_anim.update_layout(height=600, dragmode=False, showlegend=False, xaxis=dict(visible=False, scaleanchor="y", fixedrange=True), yaxis=dict(visible=False, fixedrange=True), plot_bgcolor="white", margin=dict(l=10, r=10, t=10, b=10))
+                
                 with placeholder.container():
                     st.plotly_chart(fig_anim, use_container_width=True, config={'displayModeBar': False})
-                    if s > 0: st.info(f"💡 Operatör: {st.session_state.angles[s-1]}° {st.session_state.dirs[s-1]} büküm.")
+                    if s > 0: st.info(f"💡 Operatör: {st.session_state.angles[s-1]}° {st.session_state.dirs[s-1]}")
                     else: st.success("Düz sacı yerleştirin.")
+                
                 time.sleep(1.5)
+            
             if st.session_state.anim_step >= num_steps:
-                if st.button("Baştan Başlat"): st.session_state.anim_step = 0; st.rerun()
+                if st.button("Tekrar Oynat"): st.session_state.anim_step = 0; st.rerun()
         else:
-            step = st.select_slider("Adım", options=list(range(num_steps + 1)), format_func=lambda x: f"Düz Sac" if x == 0 else f"{x}. Büküm")
+            step = st.select_slider("Adım", options=list(range(num_steps + 1)), format_func=lambda x: "Düz" if x == 0 else f"{x}")
             current_angles = [180.0] * num_steps
             for i in range(step): current_angles[i] = st.session_state.angles[i]
+            
             tsx, tsy, tax, tay, tdrs = generate_solid_and_dimensions(st.session_state.lengths, current_angles, st.session_state.dirs, th, rad)
             
             fig_anim = go.Figure()
             off_x, off_y = 20, 20
-            tsx_back = [x + off_x for x in tsx]
-            tsy_back = [y + off_y for y in tsy]
+            tsx_back = [x + off_x for x in tsx]; tsy_back = [y + off_y for y in tsy]
+            
             for i in range(0, len(tsx)-1, 2):
                 fig_anim.add_trace(go.Scatter(x=[tsx[i], tsx_back[i], tsx_back[i+1], tsx[i+1]], y=[tsy[i], tsy_back[i], tsy_back[i+1], tsy[i+1]], fill='toself', fillcolor='rgba(50, 100, 150, 0.3)', line=dict(width=0), hoverinfo='skip'))
             fig_anim.add_trace(go.Scatter(x=tsx_back, y=tsy_back, fill='toself', fillcolor='rgba(100, 150, 200, 0.2)', line=dict(color='#004a80', width=1)))
             fig_anim.add_trace(go.Scatter(x=tsx, y=tsy, fill='toself', fillcolor='rgba(70, 130, 180, 0.7)', line=dict(color='#004a80', width=2)))
+            
             if step > 0:
                 bx, by = tax[step], tay[step]
                 fig_anim.add_trace(go.Scatter(x=[bx-20, bx, bx+20], y=[by+40, by+5, by+40], fill='toself', fillcolor='rgba(150, 150, 150, 0.8)', line=dict(color='black', width=2)))
-                fig_anim.add_trace(go.Scatter(x=[bx-30, bx-15, bx, bx+15, bx+30], y=[by-40, by-40, by-10, by-40, by-40], fill='toself', fillcolor='rgba(100, 100, 100, 0.8)', line=dict(color='#000', width=2)))
+                fig_anim.add_trace(go.Scatter(x=[bx-30, bx-15, bx, bx+15, bx+30], y=[by-40, by-40, by-10, by-40, by-40], fill='toself', fillcolor='rgba(100, 100, 100, 0.8)', line=dict(color='black', width=2)))
+
             fig_anim.update_layout(height=600, dragmode=False, showlegend=False, xaxis=dict(visible=False, scaleanchor="y", fixedrange=True), yaxis=dict(visible=False, fixedrange=True), plot_bgcolor="white", margin=dict(l=10, r=10, t=10, b=10))
             st.plotly_chart(fig_anim, use_container_width=True, config={'displayModeBar': False})
