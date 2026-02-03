@@ -137,13 +137,13 @@ def generate_solid_geometry(lengths, angles, dirs, thickness, inner_radius):
     final_y = top_y + bot_y[::-1] + [top_y[0]]
     return final_x, final_y, apex_x, apex_y, directions, bend_centers
 
-# --- 6. HİZALAMA MOTORU (ORİJİNAL SAĞLAM VERSİYON) ---
+# --- 6. HİZALAMA MOTORU ---
 def align_geometry_to_bend(x_pts, y_pts, center_x, center_y, angle_cum, bend_angle, bend_dir, thickness):
     # 1. Geometriyi merkeze taşı
     new_x = [x - center_x for x in x_pts]
     new_y = [y - center_y for y in y_pts]
     
-    # 2. Döndürme Açısı (SİMETRİK V SAĞLAYAN ORİJİNAL FORMÜL)
+    # 2. Döndürme Açısı
     rotation_offset = np.radians(180 - bend_angle) / 2.0
     
     if bend_dir == "UP":
@@ -201,8 +201,24 @@ with st.sidebar:
         st.session_state.bending_data["dirs"][i] = cd.selectbox("Yön", ["UP", "DOWN"], index=idx, key=f"d{i}")
     
     st.markdown("---")
-    if st.button("➕ EKLE"): st.session_state.bending_data["lengths"].append(50.0); st.session_state.bending_data["angles"].append(90.0); st.session_state.bending_data["dirs"].append("UP"); st.rerun()
-    if st.button("🗑️ SİL"): st.session_state.bending_data["lengths"].pop(); st.session_state.bending_data["angles"].pop(); st.session_state.dirs.pop(); st.rerun()
+    
+    # --- BUTONLAR (DÜZELTİLMİŞ) ---
+    col_add, col_del = st.columns(2)
+    
+    if col_add.button("➕ EKLE"):
+        st.session_state.bending_data["lengths"].append(50.0)
+        st.session_state.bending_data["angles"].append(90.0)
+        st.session_state.bending_data["dirs"].append("UP")
+        st.rerun()
+        
+    if col_del.button("🗑️ SİL"):
+        # HATA DÜZELTME: Liste boşsa pop yapma
+        if len(st.session_state.bending_data["angles"]) > 0:
+            st.session_state.bending_data["lengths"].pop()
+            st.session_state.bending_data["angles"].pop()
+            # HATA DÜZELTME: dirs yanlış adresteydi, düzeltildi
+            st.session_state.bending_data["dirs"].pop() 
+            st.rerun()
 
 # --- 8. ANA EKRAN ---
 cur_l = st.session_state.bending_data["lengths"]
@@ -236,7 +252,6 @@ with tab2:
         if c_anim.button("▶️ OYNAT"):
             st.session_state.sim_active = True
         
-        # --- DÜZELTME: VARSAYILAN KARE 0.0 (BAŞLANGIÇ) OLMALI ---
         stroke_frames = np.linspace(0, 1, 20) if st.session_state.sim_active else [0.0]
         if st.session_state.sim_step_idx == 0: stroke_frames = [0.0]
 
