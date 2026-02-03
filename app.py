@@ -2,8 +2,6 @@ import streamlit as st
 import plotly.graph_objects as go
 import numpy as np
 import base64
-import os
-import time
 
 # --- 1. AYARLAR ---
 st.set_page_config(page_title="Büküm Simülasyonu Pro", layout="wide", initial_sidebar_state="expanded")
@@ -22,48 +20,75 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# --- 2. GÖRSEL YÖNETİMİ (ASSETS) ---
-def get_image_as_base64(filename):
-    """Assets klasöründeki resmi Plotly'nin anlayacağı formata çevirir."""
-    folder = "assets"
-    path = os.path.join(folder, filename)
-    
-    # Dosya yoksa None döner (Çizim yapılmaz)
-    if not os.path.exists(path):
-        return None
-    
-    with open(path, "rb") as image_file:
-        encoded_string = base64.b64encode(image_file.read()).decode()
-    
-    if filename.lower().endswith(".svg"):
-        return f"data:image/svg+xml;base64,{encoded_string}"
-    else:
-        return f"data:image/png;base64,{encoded_string}"
+# --- 2. GÖMÜLÜ SVG ÇİZİMLERİ (DOSYA GEREKTİRMEZ) ---
+# Bu çizimler kodun içinde yaşar. Dışarıdan dosya aramaz.
 
-# --- 3. KALIP KÜTÜPHANESİ (GÜNCELLENDİ) ---
+SVG_ASSETS = {
+    "holder": """
+    <svg xmlns="http://www.w3.org/2000/svg" width="60mm" height="60mm" viewBox="0 0 60 60">
+        <rect x="0" y="0" width="60" height="60" fill="#3b82f6" stroke="black" stroke-width="1"/>
+        <circle cx="30" cy="30" r="8" fill="#1d4ed8" />
+        <rect x="0" y="55" width="60" height="5" fill="#1e3a8a" />
+    </svg>
+    """,
+    
+    "die_120": """
+    <svg xmlns="http://www.w3.org/2000/svg" width="60mm" height="60mm" viewBox="0 0 60 60">
+        <path d="M0,0 L18,0 L30,20 L42,0 L60,0 L60,60 L0,60 Z" fill="#64748b" stroke="black" stroke-width="1"/>
+        <circle cx="10" cy="40" r="4" fill="#334155" />
+        <circle cx="50" cy="40" r="4" fill="#334155" />
+    </svg>
+    """,
+    
+    "punch_std": """
+    <svg xmlns="http://www.w3.org/2000/svg" width="40mm" height="135mm" viewBox="0 0 40 135">
+        <path d="M0,0 L40,0 L40,100 L20,135 L0,100 Z" fill="#334155" stroke="black" stroke-width="1"/>
+        <line x1="20" y1="10" x2="20" y2="100" stroke="#475569" stroke-width="2"/>
+    </svg>
+    """,
+    
+    "punch_gooseneck": """
+    <svg xmlns="http://www.w3.org/2000/svg" width="80mm" height="135mm" viewBox="0 0 80 135">
+        <path d="M10,0 L50,0 L50,70 L80,135 L78,135 L60,110 L15,110 L15,80 L0,60 L0,20 L10,0 Z" 
+        fill="#1e293b" stroke="black" stroke-width="1"/>
+        <circle cx="30" cy="30" r="5" fill="#0f172a" />
+    </svg>
+    """
+}
+
+def get_embedded_image(key):
+    """Gömülü SVG kodunu Base64 formatına çevirip Plotly'e verir."""
+    svg_string = SVG_ASSETS.get(key)
+    if not svg_string:
+        return None
+    encoded = base64.b64encode(svg_string.encode('utf-8')).decode()
+    return f"data:image/svg+xml;base64,{encoded}"
+
+# --- 3. KALIP KÜTÜPHANESİ ---
+# Burada artık dosya adı yerine yukarıdaki "key" isimlerini kullanıyoruz.
 TOOL_DB = {
     "holder": {
-        "filename": "holder.svg", 
-        "width_mm": 60.0,   # GÜNCELLENDİ
-        "height_mm": 60.0   # GÜNCELLENDİ
+        "key": "holder", 
+        "width_mm": 60.0,
+        "height_mm": 60.0
     },
     "punches": {
         "Gooseneck (Deve Boynu)": {
-            "filename": "punch_gooseneck.svg", 
-            "height_mm": 135.0, # GÜNCELLENDİ
-            "width_mm": 80.0    # GÜNCELLENDİ
+            "key": "punch_gooseneck", 
+            "height_mm": 135.0,
+            "width_mm": 80.0
         },
         "Standart (Balta)": {
-            "filename": "punch_std.svg", 
-            "height_mm": 135.0, # GÜNCELLENDİ
-            "width_mm": 40.0    # GÜNCELLENDİ
+            "key": "punch_std", 
+            "height_mm": 135.0,
+            "width_mm": 40.0
         }
     },
     "dies": {
         "120x120 (Standart)": {
-            "filename": "die_120.svg", 
-            "width_mm": 60.0,   # GÜNCELLENDİ (İsteğinize göre 60x60 yapıldı)
-            "height_mm": 60.0   # GÜNCELLENDİ
+            "key": "die_120", 
+            "width_mm": 60.0,
+            "height_mm": 60.0
         }
     }
 }
@@ -147,16 +172,12 @@ def generate_solid_geometry(lengths, angles, dirs, thickness, inner_radius):
     return final_x, final_y, apex_x, apex_y, directions, bend_centers
 
 def align_geometry_to_bend(x_pts, y_pts, center_x, center_y, angle_cum, bend_angle, bend_dir, thickness):
-    # Sacı büküm noktasına taşı
     new_x = [x - center_x for x in x_pts]
     new_y = [y - center_y for y in y_pts]
-    
-    # Döndürme
     dev = (180 - bend_angle) 
     rotation = -angle_cum 
     if bend_dir == "UP": rotation += np.radians(dev / 2) - np.pi/2
     else: rotation -= np.radians(dev / 2) + np.pi/2
-    
     cos_t, sin_t = np.cos(rotation), np.sin(rotation)
     rotated_x, rotated_y = [], []
     for i in range(len(new_x)):
@@ -237,17 +258,16 @@ with tab2:
         if c_anim.button("▶️ OYNAT"):
             st.session_state.sim_active = True
         
-        # Animasyon (15 Kare) veya Statik (1 Kare)
+        # Animasyon Loop
+        import time
         stroke_frames = np.linspace(0, 1, 15) if st.session_state.sim_active else [1.0]
         if st.session_state.sim_step_idx == 0: stroke_frames = [0.0]
 
         sim_placeholder = st.empty()
         
         for fr in stroke_frames:
-            # Stroke Hareketi: 200mm'den 0'a
             current_stroke_y = (1.0 - fr) * 200.0 + th
             
-            # Sac Geometrisi
             temp_angs = [180.0] * len(cur_a)
             curr_idx = st.session_state.sim_step_idx
             
@@ -260,7 +280,6 @@ with tab2:
             
             s_x, s_y, _, _, _, s_centers = generate_solid_geometry(cur_l, temp_angs, cur_d, th, rad)
             
-            # Hizalama
             if curr_idx > 0:
                 act_idx = curr_idx - 1
                 c_dat = s_centers[act_idx]
@@ -269,34 +288,28 @@ with tab2:
                  c_dat = s_centers[0]
                  fs_x, fs_y = [x - c_dat['x'] for x in s_x], [y - c_dat['y'] for y in s_y]
             
-            # --- PLOTLY GÖRSEL ---
             f_sim = go.Figure()
-            
-            # 1. Sac (En Alt Katman)
             f_sim.add_trace(go.Scatter(x=fs_x, y=fs_y, fill='toself', fillcolor='rgba(220, 38, 38, 0.9)', line=dict(color='#991b1b', width=2), name='Sac'))
             
-            # 2. Kalıp (Assets - Die)
-            die_src = get_image_as_base64(TOOL_DB["dies"][sel_die]["filename"])
+            # Gömülü Resimler
+            die_key = TOOL_DB["dies"][sel_die]["key"]
+            die_src = get_embedded_image(die_key)
             die_w = TOOL_DB["dies"][sel_die]["width_mm"]
             die_h = TOOL_DB["dies"][sel_die]["height_mm"]
-            if die_src:
-                f_sim.add_layout_image(dict(source=die_src, x=0, y=0, sizex=die_w, sizey=die_h, xanchor="center", yanchor="top", layer="above"))
+            if die_src: f_sim.add_layout_image(dict(source=die_src, x=0, y=0, sizex=die_w, sizey=die_h, xanchor="center", yanchor="top", layer="above"))
             
-            # 3. Bıçak (Assets - Punch) -> Y = Stroke
-            punch_src = get_image_as_base64(TOOL_DB["punches"][sel_punch]["filename"])
+            punch_key = TOOL_DB["punches"][sel_punch]["key"]
+            punch_src = get_embedded_image(punch_key)
             punch_h = TOOL_DB["punches"][sel_punch]["height_mm"]
             punch_w = TOOL_DB["punches"][sel_punch]["width_mm"]
-            if punch_src:
-                f_sim.add_layout_image(dict(source=punch_src, x=0, y=current_stroke_y, sizex=punch_w, sizey=punch_h, xanchor="center", yanchor="bottom", layer="above"))
+            if punch_src: f_sim.add_layout_image(dict(source=punch_src, x=0, y=current_stroke_y, sizex=punch_w, sizey=punch_h, xanchor="center", yanchor="bottom", layer="above"))
             
-            # 4. Tutucu (Assets - Holder) -> Y = Stroke + Bıçak Boyu
-            holder_src = get_image_as_base64(TOOL_DB["holder"]["filename"])
+            holder_key = TOOL_DB["holder"]["key"]
+            holder_src = get_embedded_image(holder_key)
             hold_w = TOOL_DB["holder"]["width_mm"]
             hold_h = TOOL_DB["holder"]["height_mm"]
-            if holder_src:
-                f_sim.add_layout_image(dict(source=holder_src, x=0, y=current_stroke_y + punch_h, sizex=hold_w, sizey=hold_h, xanchor="center", yanchor="bottom", layer="above"))
+            if holder_src: f_sim.add_layout_image(dict(source=holder_src, x=0, y=current_stroke_y + punch_h, sizex=hold_w, sizey=hold_h, xanchor="center", yanchor="bottom", layer="above"))
 
-            # Layout
             info = "Hazırlık" if curr_idx == 0 else f"Adım {curr_idx}"
             f_sim.update_layout(
                 title=dict(text=info, x=0.5), height=600, plot_bgcolor="#f1f5f9",
