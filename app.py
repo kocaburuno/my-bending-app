@@ -1,30 +1,59 @@
 import streamlit as st
 import plotly.graph_objects as go
 import numpy as np
+import time
 
-# --- 1. AYARLAR VE CSS ---
+# --- 1. AYARLAR VE STİL ---
 st.set_page_config(page_title="Büküm Simülasyonu Pro", layout="wide", initial_sidebar_state="expanded")
 
 st.markdown("""
     <style>
-    /* Sabit Görünüm ve Düzen */
     .block-container { padding-top: 3rem !important; padding-bottom: 2rem !important; }
     .stNumberInput, .stSelectbox, .stButton { margin-bottom: 5px !important; }
     div[data-testid="column"] { align-items: end; }
-    
-    /* Sonuç Kartı */
     .result-card {
         background-color: #f0f9ff; border: 1px solid #bae6fd; padding: 10px; border-radius: 8px;
         text-align: center; margin-bottom: 10px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);
     }
+    .warning-card {
+        background-color: #fef2f2; border: 1px solid #fecaca; padding: 10px; border-radius: 8px;
+        color: #991b1b; font-weight: bold; font-size: 0.9rem; margin-top: 10px; text-align: center;
+    }
     .result-value { font-size: 1.8rem; color: #0c4a6e; font-weight: 800; }
-    
-    /* Buton */
     .stButton>button { font-weight: bold; border: 1px solid #ccc; width: 100%; }
     </style>
 """, unsafe_allow_html=True)
 
-# --- 2. HAFIZA ---
+# --- 2. KALIP KÜTÜPHANESİ (VERİ TABANI) ---
+# Buraya yeni kalıplar ekleyebilirsiniz.
+TOOL_DB = {
+    "top_holder": {
+        "width": 40.0,
+        "height": 100.0
+    },
+    "punches": {
+        "Gooseneck (Deve Boynu)": {
+            "type": "gooseneck", "height": 135.0, "tip_w": 0.8, "max_w": 80.0, "color": "#334155"
+        },
+        "Standart (Balta)": {
+            "type": "straight", "height": 120.0, "tip_w": 0.8, "max_w": 20.0, "color": "#475569"
+        },
+        "İnce (Bistüri)": {
+            "type": "straight", "height": 120.0, "tip_w": 0.4, "max_w": 10.0, "color": "#64748b"
+        }
+    },
+    "dies": {
+        "120x120 (Standart)": {"w": 120.0, "h": 120.0},
+        "100x100 (Orta)":     {"w": 100.0, "h": 100.0},
+        "80x80 (Küçük)":      {"w": 80.0,  "h": 80.0},
+        "60x60 (Mini)":       {"w": 60.0,  "h": 60.0},
+        "150x150 (Büyük)":    {"w": 150.0, "h": 150.0},
+        "200x200 (Jumbo)":    {"w": 200.0, "h": 200.0},
+        "Özel Blok":          {"w": 120.0, "h": 120.0} # Kullanıcı düzenleyebilir
+    }
+}
+
+# --- 3. HAFIZA YÖNETİMİ ---
 if "bending_data" not in st.session_state:
     st.session_state.bending_data = {
         "lengths": [100.0, 100.0],
@@ -36,18 +65,17 @@ def load_preset(l, a, d):
     st.session_state.bending_data = {"lengths": l, "angles": a, "dirs": d}
     st.rerun()
 
-# --- 3. HESAPLAMALAR ---
+# --- 4. HESAPLAMA MOTORU ---
 def calculate_flat_len(lengths, angles, thickness):
     total_outer = sum(lengths)
-    deductions = []
+    loss = 0.0
     for ang in angles:
         if ang < 180:
             dev = (180.0 - ang) / 90.0
-            deductions.append((2.0 * thickness) * dev)
-    loss = sum(deductions)
+            loss += (2.0 * thickness) * dev # K faktörü basitleştirilmiş
     return total_outer - loss, total_outer
 
-# --- 4. GEOMETRİ MOTORU (KATI MODEL) ---
+# --- 5. GEOMETRİ MOTORU (KATI MODEL - SAC) ---
 def generate_solid_geometry(lengths, angles, dirs, thickness, inner_radius):
     outer_radius = inner_radius + thickness
     apex_x, apex_y = [0.0], [0.0]
@@ -85,21 +113,17 @@ def generate_solid_geometry(lengths, angles, dirs, thickness, inner_radius):
         dev_rads.append(rad_val)
     setbacks.append(0.0)
     
-    # Apex (Büküm Merkezi) İndekslerini takip etmek için
-    bend_centers = [] # Her bükümün katı model üzerindeki yaklaşık koordinatı
+    bend_centers = [] 
     
     for i in range(len(lengths)):
         flat_len = max(0.0, lengths[i] - setbacks[i] - setbacks[i+1])
-        
         dx = flat_len * np.cos(curr_da)
         dy = flat_len * np.sin(curr_da)
         nx, ny = np.sin(curr_da), -np.cos(curr_da)
         
-        # Segment Başı
         top_x.append(curr_px + dx); top_y.append(curr_py + dy)
         bot_x.append(curr_px + dx + nx*thickness); bot_y.append(curr_py + dy + ny*thickness)
         
-        # Büküm merkezi kaydı (Simülasyon hizalaması için)
         if i < len(angles):
             bend_centers.append({'x': curr_px + dx, 'y': curr_py + dy, 'angle_cumulative': curr_da})
 
@@ -130,86 +154,122 @@ def generate_solid_geometry(lengths, angles, dirs, thickness, inner_radius):
     
     return final_x, final_y, apex_x, apex_y, directions, bend_centers
 
-# --- 5. HİZALAMA VE ROTASYON (SİMÜLASYON İÇİN KRİTİK) ---
+# --- 6. HİZALAMA (SİMÜLASYON) ---
 def align_geometry_to_bend(x_pts, y_pts, center_x, center_y, angle_cum, bend_angle, bend_dir, thickness):
-    """
-    Sacı büküm noktasına taşır ve kolların havaya kalkması için döndürür.
-    """
-    # 1. TAŞIMA: Büküm noktasını (0,0)'a çek
-    # Simülasyon merkezimiz (0,0) bıçağın ucudur. Sacın alt yüzeyi buraya gelmeli.
-    # Katı model hesabında referansımız üst yüzeydi, o yüzden thickness kadar ayar gerekebilir.
-    # Basitlik için center'ı taşıyoruz.
-    
+    # 1. Taşıma: Sacı büküm noktası (0,0) olacak şekilde kaydır
+    # Simülasyon merkezi (0,0) bıçak ucudur.
+    # Sacın katı modelinde referans üst yüzeydir. Alt yüzeyi (0,0)'a oturtmak için Y ekseninde offset gerekebilir.
+    # Ancak animasyonda sacı dinamik bükeceğimiz için, referans noktasını merkeze çekiyoruz.
     new_x = [x - center_x for x in x_pts]
     new_y = [y - center_y for y in y_pts]
     
-    # 2. DÖNDÜRME:
-    # Büküm yapıldığında sac "V" şeklini alır. Bu V'nin tam ortası dikey olmalıdır.
-    # angle_cum: O ana kadar sacın yaptığı açı.
-    # bend_angle: Hedef açı (örn 90). Sapma = 180 - 90 = 90.
-    # Büküm sonrası açı ortayı (bisector) dikey eksenle hizalanmalı.
-    
-    # Basit hizalama mantığı:
-    # Sacın o anki segmentinin açısı 'angle_cum'.
-    # Büküm 'bend_dir' (1 UP, -1 DOWN).
-    # Eğer UP büküm ise sac uçları yukarı bakar.
-    # Döndürme miktarı: -(angle_cum) + (180 - bend_angle)/2 * direction
-    # Biraz deneme-yanılma ile en doğal görünüm:
-    
+    # 2. Döndürme
     dev = (180 - bend_angle) 
-    rotation = -angle_cum  # Önce segmenti düzle
+    rotation = -angle_cum  # Segmenti yatay yap
     
-    # Sonra bükümün yarısı kadar geri/ileri al ki "V" simetrik dursun
+    # Simetrik V duruşu için yarım açı kadar daha döndür
     if bend_dir == "UP":
-        rotation += np.radians(dev / 2) - np.pi/2 # UP ise V yukarı bakar
+        rotation += np.radians(dev / 2) - np.pi/2
     else:
-        rotation -= np.radians(dev / 2) + np.pi/2 # DOWN ise Ters V
+        rotation -= np.radians(dev / 2) + np.pi/2
         
-    cos_t = np.cos(rotation)
-    sin_t = np.sin(rotation)
+    cos_t, sin_t = np.cos(rotation), np.sin(rotation)
+    rotated_x, rotated_y = [], []
     
-    rotated_x = []
-    rotated_y = []
     for i in range(len(new_x)):
         rx = new_x[i] * cos_t - new_y[i] * sin_t
         ry = new_x[i] * sin_t + new_y[i] * cos_t
-        # Büküm noktası kalıp seviyesinde olsun (Y ekseni hizası)
-        # Biraz yukarı kaldırıyoruz ki alt kalıba girmesin
+        # Sacın alt yüzeyinin kalıba oturması için Y ekseninde kalınlık/2 kadar yukarı
         rotated_x.append(rx)
         rotated_y.append(ry + thickness/2) 
         
     return rotated_x, rotated_y
 
-# --- 6. MAKİNE PARÇALARI ---
-def get_machine_parts(th):
-    # Basit ve Şematik Çizim
-    width = 60 # Sabit genişlik
-    v_gap = th * 8 # V genişliği
+# --- 7. MAKİNE PARÇALARI (DİNAMİK ÇİZİM) ---
+def get_machine_parts(th, punch_name, die_name, stroke_offset=0):
+    """
+    th: Sac Kalınlığı
+    punch_name: Seçilen bıçak tipi
+    die_name: Seçilen kalıp tipi
+    stroke_offset: Animasyon için bıçağın Y konumu (0 = Büküm anı, 200 = En üst)
+    """
     
-    # 1. ALT KALIP (3 Numara) - Sabit
-    die_x = [-width/2, -v_gap/2, 0, v_gap/2, width/2, width/2, -width/2, -width/2]
-    die_y = [0, 0, -v_gap/2, 0, 0, -50, -50, 0] # V derinliği
+    # 1. ALT KALIP (DIE) ÖLÇÜLERİ
+    die_data = TOOL_DB["dies"].get(die_name, TOOL_DB["dies"]["120x120 (Standart)"])
+    die_w = die_data["w"]
+    die_h = die_data["h"]
     
-    # 2. ÜST BIÇAK (2 Numara) - Hareketli gibi çizilecek
-    punch_w = 4
-    punch_h = 40
-    tip_h = 10
-    start_y = th + 2 # Sacın hemen üstü
+    # V Kanal Hesabı (Operatör isteği: 12 x Kalınlık)
+    v_opening = th * 12.0
+    v_depth = v_opening / 2.0 * np.tan(np.radians(60)) # Yaklaşık 88 derece V için derinlik
+    if v_depth > die_h * 0.8: v_depth = die_h * 0.8 # Güvenlik
     
-    punch_x = [-punch_w/2, 0, punch_w/2, punch_w/2, -punch_w/2, -punch_w/2]
-    punch_y = [start_y, start_y-tip_h, start_y, start_y+punch_h, start_y+punch_h, start_y]
+    die_x = [-die_w/2, -v_opening/2, 0, v_opening/2, die_w/2, die_w/2, -die_w/2, -die_w/2]
+    die_y = [0, 0, -v_depth, 0, 0, -die_h, -die_h, 0]
     
-    # 3. TUTUCU (1 Numara)
-    hold_w = 40
-    hold_h = 20
-    hold_y = start_y + punch_h
+    # 2. ÜST TUTUCU (HOLDER) - Sabit ama ölçüler DB'den
+    holder_data = TOOL_DB["top_holder"]
+    hw, hh = holder_data["width"], holder_data["height"]
     
-    holder_x = [-hold_w/2, hold_w/2, hold_w/2, -hold_w/2, -hold_w/2]
-    holder_y = [hold_y, hold_y, hold_y+hold_h, hold_y+hold_h, hold_y]
+    # 3. ÜST BIÇAK (PUNCH)
+    p_data = TOOL_DB["punches"].get(punch_name, TOOL_DB["punches"]["Standart (Balta)"])
+    ph = p_data["height"]
+    pw_max = p_data["max_w"]
+    tip_w = p_data.get("tip_w", 0.5)
     
-    return (die_x, die_y), (punch_x, punch_y), (holder_x, holder_y)
+    # Stroke Hareketi: Bıçak ve Tutucu stroke_offset kadar yukarıda çizilir
+    # Büküm anında (offset=0), bıçak ucu sac kalınlığı kadar yukarıda durmalı (sac arada)
+    # Simülasyon referansı (0,0) kalıp üst yüzeyi.
+    # Sac kalınlığı 'th'. Bıçak ucu y = th + stroke_offset
+    current_y = th + stroke_offset
+    
+    punch_x, punch_y = [], []
+    
+    if p_data["type"] == "gooseneck":
+        # Deve Boynu Formu (135mm boy, 80mm genişlik)
+        # Koordinatlar (Uçtan yukarı doğru)
+        neck_indent = pw_max * 0.6 # İçeri girinti
+        shoulder_h = ph * 0.4      # Omuz yüksekliği
+        
+        # Uç (0, current_y)
+        punch_x = [0, tip_w, pw_max, pw_max, hw/2, -hw/2, -neck_indent, -neck_indent, -tip_w, 0]
+        # Y koordinatları (basit poligon)
+        # Daha detaylı çizim için vertex eklenmeli, şimdilik şematik:
+        # Sağ taraf düz iner, Sol taraf "C" yapar.
+        
+        # Basitleştirilmiş Gooseneck Poligonu:
+        punch_x = [
+            0,          # Uç
+            tip_w*2,    # Uç sağ
+            pw_max,     # Sağ geniş
+            pw_max,     # Sağ üst
+            -hw/2,      # Sol üst (Tutucu hizası)
+            -pw_max,    # Sol dış
+            -pw_max,    # Sol alt köşe
+            -tip_w*4,   # Boyun girintisi başlangıç
+            -tip_w*4,   # Boyun girintisi bitiş (kütük)
+            0           # Uç
+        ]
+        # Y koordinatlarını ofsetle
+        py_rel = [
+            0, 5, 40, ph, ph, 40, 20, 20, 5, 0 
+        ]
+        punch_y = [y + current_y for y in py_rel]
+        
+    else:
+        # Standart Düz Bıçak
+        punch_x = [0, pw_max/2, pw_max/2, -pw_max/2, -pw_max/2, 0]
+        py_rel = [0, 10, ph, ph, 10, 0]
+        punch_y = [y + current_y for y in py_rel]
+        
+    # Tutucu Koordinatları (Bıçağın hemen üstünde)
+    holder_base_y = current_y + ph
+    holder_x = [-hw/2, hw/2, hw/2, -hw/2, -hw/2]
+    holder_y = [holder_base_y, holder_base_y, holder_base_y + hh, holder_base_y + hh, holder_base_y]
+    
+    return (die_x, die_y), (punch_x, punch_y), (holder_x, holder_y), v_opening
 
-# --- 7. ÖLÇÜLENDİRME ---
+# --- 8. ÖLÇÜLENDİRME ---
 def add_smart_dims(fig, px, py, lengths):
     dim_offset = 50.0
     for i in range(len(lengths)):
@@ -226,12 +286,28 @@ def add_smart_dims(fig, px, py, lengths):
         fig.add_trace(go.Scatter(x=[d1[0], d2[0]], y=[d1[1], d2[1]], mode='lines+markers', marker=dict(symbol='arrow', size=8, angleref='previous', color='black'), line=dict(color='black'), hoverinfo='skip'))
         fig.add_annotation(x=mid[0], y=mid[1], text=f"<b>{lengths[i]:.1f}</b>", showarrow=False, font=dict(color="#B22222", size=12), bgcolor="white")
 
-# --- 8. ARAYÜZ ---
+# --- 9. ARAYÜZ VE KONTROLLER ---
 with st.sidebar:
-    st.header("Ayarlar")
+    st.header("⚙️ Konfigürasyon")
+    
+    # KALIP SEÇİMİ
+    st.subheader("Kalıp Seti")
+    sel_punch = st.selectbox("Üst Bıçak", list(TOOL_DB["punches"].keys()))
+    sel_die = st.selectbox("Alt Kalıp", list(TOOL_DB["dies"].keys()))
+    
     c1, c2 = st.columns(2)
-    th = c1.number_input("Kalınlık", min_value=0.1, value=2.0, step=0.1)
-    rad = c2.number_input("Radius", min_value=0.5, value=0.8, step=0.1)
+    th = c1.number_input("Kalınlık (mm)", min_value=0.1, value=2.0, step=0.1)
+    rad = c2.number_input("Radius (mm)", min_value=0.5, value=0.8, step=0.1)
+    
+    # Uyarı Kartı (Hesaplanan V)
+    v_calc = th * 12.0
+    st.markdown(f"""
+    <div class="warning-card">
+        ⚠️ DİKKAT: Minimum V Kanalı<br>
+        {v_calc:.1f} mm olmalıdır!<br>
+        (Kalınlık x 12)
+    </div>
+    """, unsafe_allow_html=True)
 
     st.markdown("---")
     st.subheader("Şablonlar")
@@ -257,7 +333,7 @@ with st.sidebar:
     if c_plus.button("➕ EKLE"): st.session_state.bending_data["lengths"].append(50.0); st.session_state.bending_data["angles"].append(90.0); st.session_state.bending_data["dirs"].append("UP"); st.rerun()
     if c_minus.button("🗑️ SİL"): st.session_state.bending_data["lengths"].pop(); st.session_state.bending_data["angles"].pop(); st.session_state.dirs.pop(); st.rerun()
 
-# --- 9. ANA EKRAN ---
+# --- 10. ANA GÖRÜNÜM ---
 cur_l = st.session_state.bending_data["lengths"]
 cur_a = st.session_state.bending_data["angles"]
 cur_d = st.session_state.bending_data["dirs"]
@@ -265,116 +341,164 @@ cur_d = st.session_state.bending_data["dirs"]
 flat, total = calculate_flat_len(cur_l, cur_a, th)
 sx, sy, ax, ay, drs, centers = generate_solid_geometry(cur_l, cur_a, cur_d, th, rad)
 
-tab1, tab2 = st.tabs(["📐 Teknik Resim", "🎬 Makine Simülasyonu"])
+tab1, tab2 = st.tabs(["📐 Teknik Resim & Açınım", "🎬 Operatör Simülasyonu"])
 
 with tab1:
-    st.markdown(f"""<div class="result-card"><div class="result-value">AÇINIM: {flat:.2f} mm</div><small>Dış Toplam: {total:.1f}</small></div>""", unsafe_allow_html=True)
+    st.markdown(f"""<div class="result-card"><div class="result-value">AÇINIM: {flat:.2f} mm</div><small>Dış Toplam: {total:.1f} | Kayıp: {flat-total:.1f}</small></div>""", unsafe_allow_html=True)
     fig = go.Figure()
     fig.add_trace(go.Scatter(x=sx, y=sy, fill='toself', fillcolor='rgba(70, 130, 180, 0.4)', line=dict(color='#004a80', width=2), mode='lines'))
     add_smart_dims(fig, ax, ay, cur_l)
     
-    # Otomatik Zoom Ayarı
-    x_min, x_max = min(sx), max(sx)
-    y_min, y_max = min(sy), max(sy)
-    pad_x = (x_max - x_min) * 0.1 + 10
-    pad_y = (y_max - y_min) * 0.1 + 10
-    
-    fig.update_layout(
-        height=550, plot_bgcolor="white", 
-        xaxis=dict(visible=False, scaleanchor="y", range=[x_min-pad_x, x_max+pad_x], fixedrange=True), 
-        yaxis=dict(visible=False, range=[y_min-pad_y, y_max+pad_y], fixedrange=True),
-        margin=dict(l=10, r=10, t=10, b=10)
-    )
+    # Auto Zoom
+    x_min, x_max, y_min, y_max = min(sx), max(sx), min(sy), max(sy)
+    pad = 20
+    fig.update_layout(height=500, plot_bgcolor="white", xaxis=dict(visible=False, range=[x_min-pad, x_max+pad], fixedrange=True), yaxis=dict(visible=False, range=[y_min-pad, y_max+pad], fixedrange=True), margin=dict(l=10, r=10, t=10, b=10))
     st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
 
 with tab2:
     if len(cur_a) == 0:
-        st.info("Lütfen büküm ekleyin.")
+        st.info("Simülasyon için büküm ekleyin.")
     else:
-        # Kontroller
-        c_p, c_c, c_n = st.columns([1, 4, 1])
-        if "sim_idx" not in st.session_state: st.session_state.sim_idx = 0
+        # Animasyon Kontrolleri
+        if "anim_active" not in st.session_state: st.session_state.anim_active = False
+        if "step_idx" not in st.session_state: st.session_state.step_idx = 0
+        if "frame_progress" not in st.session_state: st.session_state.frame_progress = 0.0 # 0.0 to 1.0 (Stroke)
         
-        if c_p.button("⬅️ Geri") and st.session_state.sim_idx > 0: st.session_state.sim_idx -= 1
-        if c_n.button("İleri ➡️") and st.session_state.sim_idx < len(cur_a): st.session_state.sim_idx += 1
-            
-        step = st.session_state.sim_idx # 0: Hazırlık, 1: 1.Büküm...
+        col_anim1, col_anim2, col_anim3 = st.columns([1, 4, 2])
         
-        # Simülasyon Geometrisini Hazırla
-        # O anki adıma kadar olan açıları al, gerisini 180 yap
-        temp_angles = [180.0] * len(cur_a)
-        
-        # Eğer Adım 1 ise, index 0'daki büküm yapılıyor demektir.
-        # Animasyon efekti yerine doğrudan sonucu gösteriyoruz (Basitlik için)
-        for i in range(len(cur_a)):
-            if i < step:
-                temp_angles[i] = cur_a[i] # Bükülmüş
-            else:
-                temp_angles[i] = 180.0 # Henüz düz
-        
-        # Sacı Hesapla
-        sim_x, sim_y, _, _, _, sim_centers = generate_solid_geometry(cur_l, temp_angles, cur_d, th, rad)
-        
-        # Hizalama Mantığı
-        # Eğer adım > 0 ise, ilgili bükümü (step-1) merkeze taşı
-        if step > 0:
-            active_bend_idx = step - 1
-            # Geometride büküm merkezini bul (sim_centers listesinden)
-            # Ancak sim_centers, generate_solid_geometry içinde 'angles' boyutu kadar üretiliyor.
-            # Düz (180) olanlar da üretiliyor mu? Evet kodda loop angles kadar.
-            
-            if active_bend_idx < len(sim_centers):
-                center_data = sim_centers[active_bend_idx]
-                cx, cy, cang = center_data['x'], center_data['y'], center_data['angle_cumulative']
-                b_ang = cur_a[active_bend_idx]
-                b_dir = cur_d[active_bend_idx]
-                
-                # Hizalama ve Döndürme Fonksiyonu
-                final_sim_x, final_sim_y = align_geometry_to_bend(sim_x, sim_y, cx, cy, cang, b_ang, b_dir, th)
-            else:
-                final_sim_x, final_sim_y = sim_x, sim_y # Hata toleransı
-        else:
-            # Adım 0: Düz sac, ortala
-            # İlk büküm noktasını referans alalım ki makineye otursun
-            center_data = sim_centers[0]
-            cx, cy = center_data['x'], center_data['y']
-            # Sadece kaydır, döndürme yapma
-            final_sim_x = [x - cx for x in sim_x]
-            final_sim_y = [y - cy for y in sim_y]
+        # Büküm Seçici
+        step_options = ["Hazırlık"] + [f"{i+1}. Büküm ({cur_a[i]}°)" for i in range(len(cur_a))]
+        selected_step_name = col_anim2.selectbox("Operasyon Adımı", step_options, index=st.session_state.step_idx, key="sb_step")
+        # Selectbox değişirse state güncelle
+        new_idx = step_options.index(selected_step_name)
+        if new_idx != st.session_state.step_idx:
+            st.session_state.step_idx = new_idx
+            st.session_state.frame_progress = 0.0
+            st.rerun()
 
-        # Makine Parçaları
-        (die_x, die_y), (punch_x, punch_y), (hold_x, hold_y) = get_machine_parts(th)
+        # Oynat Butonu
+        if col_anim1.button("▶️ OYNAT"):
+            st.session_state.anim_active = True
         
-        # Çizim
-        f = go.Figure()
+        # ANİMASYON MANTIĞI
+        # Animasyon sadece "Büküm" adımlarında çalışır (Hazırlıkta hareket yok)
+        stroke_val = 200.0 # Varsayılan: Bıçak 200mm yukarıda
         
-        # Makine (Sabit)
-        f.add_trace(go.Scatter(x=die_x, y=die_y, fill='toself', fillcolor='#475569', line=dict(color='black'), name='3. Alt Kalıp'))
+        current_step_idx = st.session_state.step_idx
         
-        # Üst Grup (Hareketli Efekti - Sacın üstüne konmalı)
-        # Eğer sac bükülmüşse (step > 0), bıçak aşağı inmiş demektir (y=0 civarı).
-        # Eğer sac düzse (step=0), bıçak yukarıda bekler.
-        punch_offset_y = 0 if step > 0 else 40
-        
-        f.add_trace(go.Scatter(x=punch_x, y=[y+punch_offset_y for y in punch_y], fill='toself', fillcolor='#334155', line=dict(color='black'), name='2. Bıçak'))
-        f.add_trace(go.Scatter(x=hold_x, y=[y+punch_offset_y for y in hold_y], fill='toself', fillcolor='#0ea5e9', line=dict(color='black'), name='1. Tutucu'))
-        
-        # Sac
-        f.add_trace(go.Scatter(x=final_sim_x, y=final_sim_y, fill='toself', fillcolor='rgba(220, 38, 38, 0.9)', line=dict(color='#991b1b', width=2), name='Sac'))
-        
-        # Başlık
-        info_txt = "Hazırlık: Sacı yerleştirin." if step == 0 else f"Adım {step}: {cur_a[step-1]}° ({cur_d[step-1]})"
-        
-        # Sabit Zoom Ayarı (Makine Odaklı)
-        f.update_layout(
-            title=dict(text=info_txt, x=0.5),
-            height=600, plot_bgcolor="#f1f5f9",
-            xaxis=dict(visible=False, scaleanchor="y", range=[-120, 120], fixedrange=True),
-            yaxis=dict(visible=False, range=[-80, 150], fixedrange=True),
-            legend=dict(orientation="h", y=1, x=0),
-            margin=dict(l=10, r=10, t=40, b=10)
-        )
-        st.plotly_chart(f, use_container_width=True, config={'displayModeBar': False})
-        
-        if step > 0:
-            st.warning(f"Operatör Notu: {step}. bükümü yaparken sacın kollarının kalıba çarpmadığından emin olun.")
+        if st.session_state.anim_active and current_step_idx > 0:
+            placeholder = st.empty()
+            
+            # Animasyon Döngüsü: İniş -> Büküm -> Kalkış
+            # Basitlik için sadece İniş+Büküm gösteriyoruz (0.0 -> 1.0)
+            # 0.0: Bıçak 200mm'de, Sac Düz
+            # 1.0: Bıçak 0mm'de, Sac Bükük
+            
+            frames = np.linspace(0, 1, 20) # 20 Karelik akıcı hareket
+            
+            for fr in frames:
+                # 1. Stroke Hesabı (Doğrusal İniş)
+                # Bıçak 200mm'den 0'a iniyor
+                current_stroke = 200.0 * (1.0 - fr)
+                
+                # 2. Açı Hesabı (Sacın Bükülmesi)
+                # Sac, bıçak kalıba değdiği andan itibaren bükülmeye başlar.
+                # Gerçekçilik için: Stroke 50mm altına inince büküm başlasın.
+                target_angle = cur_a[current_step_idx-1]
+                
+                # Büküm oranı: Stroke 0 olduğunda tam açı, stroke yüksekken 180 derece
+                # Basit interpolasyon:
+                current_angle_val = 180.0 - (180.0 - target_angle) * fr
+                
+                # GEOMETRİ OLUŞTURMA
+                # Geçici açı listesi: Mevcut adıma kadar olanlar sabit, şimdiki adım animasyonlu
+                temp_angles = [180.0] * len(cur_a)
+                for k in range(len(cur_a)):
+                    if k < current_step_idx - 1:
+                        temp_angles[k] = cur_a[k] # Öncekiler bükülü
+                    elif k == current_step_idx - 1:
+                        temp_angles[k] = current_angle_val # Şu an bükülen
+                    else:
+                        temp_angles[k] = 180.0 # Sonrakiler düz
+                
+                # Sacı Çiz
+                s_x, s_y, _, _, _, s_centers = generate_solid_geometry(cur_l, temp_angles, cur_d, th, rad)
+                
+                # Hizalama
+                active_bend_idx = current_step_idx - 1
+                c_dat = s_centers[active_bend_idx]
+                fs_x, fs_y = align_geometry_to_bend(
+                    s_x, s_y, c_dat['x'], c_dat['y'], c_dat['angle_cumulative'], 
+                    current_angle_val, cur_d[active_bend_idx], th
+                )
+                
+                # Makine Parçaları (Stroke ile hareketli)
+                (d_x, d_y), (p_x, p_y), (h_x, h_y), v_w = get_machine_parts(th, sel_punch, sel_die, stroke_offset=current_stroke)
+                
+                # Çizim
+                f_sim = go.Figure()
+                f_sim.add_trace(go.Scatter(x=d_x, y=d_y, fill='toself', fillcolor='#cbd5e1', line=dict(color='#334155'), name='Alt Kalıp'))
+                f_sim.add_trace(go.Scatter(x=p_x, y=p_y, fill='toself', fillcolor=TOOL_DB["punches"][sel_punch]["color"], line=dict(color='black'), name='Bıçak'))
+                f_sim.add_trace(go.Scatter(x=h_x, y=h_y, fill='toself', fillcolor='#3b82f6', line=dict(color='black'), name='Tutucu'))
+                f_sim.add_trace(go.Scatter(x=fs_x, y=fs_y, fill='toself', fillcolor='rgba(220, 38, 38, 0.9)', line=dict(color='#991b1b', width=2), name='Sac'))
+                
+                # Görsel Ayarlar
+                f_sim.update_layout(
+                    title=f"Bükülüyor... %{int(fr*100)}",
+                    height=600, plot_bgcolor="#f8fafc",
+                    xaxis=dict(visible=False, range=[-150, 150], fixedrange=True),
+                    yaxis=dict(visible=False, range=[-100, 250], fixedrange=True),
+                    showlegend=False, margin=dict(t=40, b=0, l=0, r=0)
+                )
+                placeholder.plotly_chart(f_sim, use_container_width=True)
+                time.sleep(0.05) # FPS Ayarı
+                
+            st.session_state.anim_active = False # Döngü bitince dur
+            
+        else:
+            # DURGUN GÖRÜNTÜ (Son Durum)
+            # Eğer adım 0 ise Hazırlık (Bıçak yukarıda)
+            # Eğer adım > 0 ise Bükülmüş hal (Bıçak aşağıda)
+            
+            static_stroke = 200.0 if current_step_idx == 0 else 0.0
+            
+            # Açılar
+            temp_angles = [180.0] * len(cur_a)
+            for k in range(len(cur_a)):
+                if k < current_step_idx:
+                    temp_angles[k] = cur_a[k]
+            
+            # Sac
+            s_x, s_y, _, _, _, s_centers = generate_solid_geometry(cur_l, temp_angles, cur_d, th, rad)
+            
+            # Hizalama
+            if current_step_idx > 0:
+                active_idx = current_step_idx - 1
+                c_dat = s_centers[active_idx]
+                fs_x, fs_y = align_geometry_to_bend(s_x, s_y, c_dat['x'], c_dat['y'], c_dat['angle_cumulative'], cur_a[active_idx], cur_d[active_idx], th)
+            else:
+                c_dat = s_centers[0]
+                fs_x = [x - c_dat['x'] for x in s_x]
+                fs_y = [y - c_dat['y'] for y in s_y]
+            
+            # Makine
+            (d_x, d_y), (p_x, p_y), (h_x, h_y), v_w = get_machine_parts(th, sel_punch, sel_die, stroke_offset=static_stroke)
+            
+            f_static = go.Figure()
+            f_static.add_trace(go.Scatter(x=d_x, y=d_y, fill='toself', fillcolor='#cbd5e1', line=dict(color='#334155'), name='Alt Kalıp'))
+            f_static.add_trace(go.Scatter(x=p_x, y=p_y, fill='toself', fillcolor=TOOL_DB["punches"][sel_punch]["color"], line=dict(color='black'), name='Bıçak'))
+            f_static.add_trace(go.Scatter(x=h_x, y=h_y, fill='toself', fillcolor='#3b82f6', line=dict(color='black'), name='Tutucu'))
+            f_static.add_trace(go.Scatter(x=fs_x, y=fs_y, fill='toself', fillcolor='rgba(220, 38, 38, 0.9)', line=dict(color='#991b1b', width=2), name='Sac'))
+            
+            title_txt = "Hazırlık: Parçayı Yerleştir" if current_step_idx == 0 else f"Büküm Tamamlandı: {cur_a[current_step_idx-1]}°"
+            f_static.update_layout(
+                title=title_txt,
+                height=600, plot_bgcolor="#f8fafc",
+                xaxis=dict(visible=False, range=[-150, 150], fixedrange=True),
+                yaxis=dict(visible=False, range=[-100, 250], fixedrange=True),
+                showlegend=False, margin=dict(t=40, b=0, l=0, r=0)
+            )
+            st.plotly_chart(f_static, use_container_width=True)
+            
+            if current_step_idx > 0:
+                st.info(f"💡 Bilgi: Kullanılan V Kanalı: {v_w:.1f}mm (Sacın {th}mm kalınlığına uygun).")
