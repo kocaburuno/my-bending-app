@@ -137,42 +137,53 @@ def generate_solid_geometry(lengths, angles, dirs, thickness, inner_radius):
     final_y = top_y + bot_y[::-1] + [top_y[0]]
     return final_x, final_y, apex_x, apex_y, directions, bend_centers
 
-# --- 6. HİZALAMA MOTORU (DÜZELTİLDİ: FLIP ÖZELLİĞİ EKLENDİ) ---
+# --- 6. HİZALAMA MOTORU (DÜZELTİLDİ: SİMETRİK FLIP ALGORİTMASI) ---
 def align_geometry_to_bend(x_pts, y_pts, center_x, center_y, angle_cum, bend_angle, bend_dir, thickness):
-    # 1. Geometriyi orijine (büküm merkezine) taşı
+    """
+    Parçayı büküm merkezine hizalar.
+    Eğer 'UP' ise parçayı fiziksel olarak ters çevirir (Mirror).
+    """
+    
+    # 1. Parçayı büküm merkezine (0,0) taşı
     new_x = np.array(x_pts) - center_x
     new_y = np.array(y_pts) - center_y
     
-    is_flipped = False # Takla atıldı mı?
+    is_flipped = False
     
-    # --- FLIP MANTIĞI ---
-    # Eğer büküm YUKARI (UP) ise, gerçek hayatta operatör parçayı çevirir.
-    # Biz de simülasyonda Y eksenini ters çevirip (Mirror), bükümü AŞAĞI (DOWN) gibi işleriz.
+    # --- FLIP (TAKLA) MANTIĞI ---
+    # Eğer büküm UP ise, gerçekte operatör sacı ters çevirir.
+    # Bu yüzden Y koordinatlarını -Y yaparız (Mirror).
+    # Ayrıca sac ters döndüğü için, giriş açısı (angle_cum) da tersine döner.
     if bend_dir == "UP":
-        new_y = -new_y  # Aynalama
-        angle_cum = -angle_cum # Ayna alındığı için açı yönü de değişir
+        new_y = -new_y        # Aynalama
+        angle_cum = -angle_cum # Açı yönünü düzeltme
         is_flipped = True
     
-    # 2. Döndürme Açısı
-    # Parçayı V kanalının ortasına dik hizalamak için:
-    # (180 - büküm açısı) / 2 kadar döndürülür.
+    # 2. ROTASYON HESABI (Simetrik V)
+    # Büküm açısı (örneğin 90 derece) oluştuğunda, sacın
+    # V kalıbına simetrik oturması için gereken açı.
+    # Deviation (Sapma) = 180 - Hedef Açı
     
-    rotation_offset = np.radians(180 - bend_angle) / 2.0
+    deviation_rad = np.radians(180.0 - bend_angle)
     
-    # Artık tüm bükümler DOWN mantığıyla çalıştığı için (Flip sayesinde), tek formül yeterli:
-    rotation = -angle_cum + rotation_offset
-        
-    cos_t, sin_t = np.cos(rotation), np.sin(rotation)
+    # Formül: 
+    # -angle_cum: Parçayı önce yatay (düz) hale getirir.
+    # + deviation/2: Kanatları eşit şekilde yukarı kaldırır (V simetrisi).
+    rotation = -angle_cum + (deviation_rad / 2.0)
     
-    # Numpy array ile hızlı dönüşüm
+    cos_t = np.cos(rotation)
+    sin_t = np.sin(rotation)
+    
+    # 3. DÖNDÜRME UYGULA
     rotated_x = new_x * cos_t - new_y * sin_t
     rotated_y = new_x * sin_t + new_y * cos_t
     
-    # Kalınlık Ofseti: Simülasyonda parça alt kalıbın üstüne basmalı.
-    # Döndürme işlemi orta eksenden yapıldığı için, sacı kalınlık/2 kadar yukarı kaldırıyoruz.
-    rotated_y = rotated_y + (thickness / 2.0)
+    # 4. KALINLIK OFSETİ
+    # Sacın alt yüzeyinin 0 noktasına (Kalıp yüzeyi) oturması için yukarı kaldır.
+    # Nötr eksen ortadaysa, thickness/2 kadar yukarı.
+    final_y = rotated_y + (thickness / 2.0)
         
-    return rotated_x.tolist(), rotated_y.tolist(), is_flipped
+    return rotated_x.tolist(), final_y.tolist(), is_flipped
 
 def add_smart_dims(fig, px, py, lengths):
     dim_offset = 60.0
@@ -280,8 +291,16 @@ with tab2:
             if curr_idx > 0:
                 act_idx = curr_idx - 1
                 c_dat = s_centers[act_idx]
-                # Dönüş değerini alıyoruz (is_flipped dahil)
-                fs_x, fs_y, is_flipped = align_geometry_to_bend(s_x, s_y, c_dat['x'], c_dat['y'], c_dat['angle_cumulative'], temp_angs[act_idx], cur_d[act_idx], th)
+                
+                # YENİ FONKSİYON KULLANIMI:
+                fs_x, fs_y, is_flipped = align_geometry_to_bend(
+                    s_x, s_y, 
+                    c_dat['x'], c_dat['y'], 
+                    c_dat['angle_cumulative'], 
+                    temp_angs[act_idx], 
+                    cur_d[act_idx], 
+                    th
+                )
             else:
                  c_dat = s_centers[0]
                  fs_x, fs_y = [x - c_dat['x'] for x in s_x], [y - c_dat['y'] for y in s_y]
