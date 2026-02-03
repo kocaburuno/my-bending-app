@@ -192,7 +192,7 @@ with st.sidebar:
             
             if die_file in files: 
                 st.caption(f"✔️ {die_file} OK")
-                # Küçük bir önizleme göster (Eğer burada görünüyorsa yol doğrudur)
+                # Küçük bir önizleme göster
                 st.image(os.path.join(ASSETS_DIR, die_file), width=50)
             else: 
                 st.error(f"❌ {die_file} YOK!")
@@ -297,25 +297,45 @@ with tab2:
             
             # --- RESİMLERİ YÜKLEME ---
             try:
-                # Alt Kalıp (Sabit)
+                # 1. ALT KALIP (SABİT)
                 die_d = TOOL_DB["dies"][sel_die]
                 die_src = get_local_image_base64(die_d["filename"])
                 if die_src: 
-                    f_sim.add_layout_image(dict(source=die_src, x=0, y=0, sizex=die_d["width_mm"], sizey=die_d["height_mm"], xanchor="center", yanchor="top", layer="below"))
+                    # DÜZELTME: xref="x", yref="y" EKLENDİ!
+                    f_sim.add_layout_image(dict(
+                        source=die_src, 
+                        x=0, y=0, 
+                        sizex=die_d["width_mm"], sizey=die_d["height_mm"], 
+                        xanchor="center", yanchor="top", 
+                        layer="below",
+                        xref="x", yref="y" # <-- İŞTE BU EKSİKTİ!
+                    ))
                 
-                # Bıçak (Hareketli)
+                # 2. BIÇAK (HAREKETLİ)
                 punch_d = TOOL_DB["punches"][sel_punch]
                 punch_src = get_local_image_base64(punch_d["filename"])
                 if punch_src: 
-                    # Bıçağın alt ucu current_stroke_y'ye basmalı
-                    f_sim.add_layout_image(dict(source=punch_src, x=0, y=current_stroke_y, sizex=punch_d["width_mm"], sizey=punch_d["height_mm"], xanchor="center", yanchor="bottom", layer="below"))
+                    f_sim.add_layout_image(dict(
+                        source=punch_src, 
+                        x=0, y=current_stroke_y, 
+                        sizex=punch_d["width_mm"], sizey=punch_d["height_mm"], 
+                        xanchor="center", yanchor="bottom", 
+                        layer="below",
+                        xref="x", yref="y" # <-- İŞTE BU EKSİKTİ!
+                    ))
                 
-                # Tutucu (Hareketli)
+                # 3. TUTUCU (HAREKETLİ)
                 hold_d = TOOL_DB["holder"]
                 hold_src = get_local_image_base64(hold_d["filename"])
                 if hold_src: 
-                    # Bıçağın tepesine basmalı
-                    f_sim.add_layout_image(dict(source=hold_src, x=0, y=current_stroke_y + punch_d["height_mm"], sizex=hold_d["width_mm"], sizey=hold_d["height_mm"], xanchor="center", yanchor="bottom", layer="below"))
+                    f_sim.add_layout_image(dict(
+                        source=hold_src, 
+                        x=0, y=current_stroke_y + punch_d["height_mm"], 
+                        sizex=hold_d["width_mm"], sizey=hold_d["height_mm"], 
+                        xanchor="center", yanchor="bottom", 
+                        layer="below",
+                        xref="x", yref="y" # <-- İŞTE BU EKSİKTİ!
+                    ))
             except Exception as e:
                 st.error(f"Görsel yükleme hatası: {e}")
 
