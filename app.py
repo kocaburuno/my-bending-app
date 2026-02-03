@@ -22,22 +22,31 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
+# --- DEBUG: DOSYA KONTROLÜ (SOL MENÜDE GÖRÜNECEK) ---
+with st.sidebar:
+    st.write("📂 **Sistem Durumu:**")
+    if os.path.exists("assets"):
+        files = os.listdir("assets")
+        st.success(f"✅ Assets klasörü bulundu.\nDosyalar: {len(files)} adet")
+        # Dosya isimlerini kontrol et
+        if "die_v120.png" in files:
+            st.caption("✔️ die_v120.png mevcut")
+        else:
+            st.error("❌ die_v120.png EKSİK!")
+    else:
+        st.error("🚨 HATA: 'assets' klasörü yok!")
+
 # --- 2. RESİM OKUYUCU FONKSİYON ---
 def get_local_image(filename):
     """Assets klasöründeki PNG dosyasını Base64 formatına çevirir."""
-    # Dosya yolunu oluştur
     path = os.path.join("assets", filename)
-    
-    # Dosya kontrolü
     if not os.path.exists(path):
         return None
-    
-    # Dosyayı oku ve kodla
     with open(path, "rb") as f:
         encoded = base64.b64encode(f.read()).decode()
     return f"data:image/png;base64,{encoded}"
 
-# --- 3. KALIP VERİTABANI (DOSYA İSİMLERİ BURADA) ---
+# --- 3. KALIP VERİTABANI (DÜZELTİLDİ) ---
 TOOL_DB = {
     "holder": {
         "filename": "holder.png", 
@@ -58,7 +67,8 @@ TOOL_DB = {
     },
     "dies": {
         "120x120 (Standart)": {
-            "filename": "die_120.png", 
+            # Github'daki dosya isminizle eşleştirildi: die_v120.png
+            "filename": "die_v120.png", 
             "width_mm": 60.0,
             "height_mm": 60.0
         }
@@ -85,7 +95,7 @@ def generate_solid_geometry(lengths, angles, dirs, thickness, inner_radius):
     curr_x, curr_y, curr_ang = 0.0, 0.0, 0.0
     deviation_angles, directions = [], []
     
-    # 1. Apex Hattı (Ölçü referansı)
+    # 1. Apex Hattı
     for i in range(len(lengths)):
         L = lengths[i]
         dev_deg, d_val = 0.0, 0
@@ -93,11 +103,8 @@ def generate_solid_geometry(lengths, angles, dirs, thickness, inner_radius):
             u_ang = angles[i]
             d_val = 1 if dirs[i] == "UP" else -1
             dev_deg = (180.0 - u_ang) if u_ang != 180 else 0.0
-        
-        curr_x += L * np.cos(curr_ang)
-        curr_y += L * np.sin(curr_ang)
+        curr_x += L * np.cos(curr_ang); curr_y += L * np.sin(curr_ang)
         apex_x.append(curr_x); apex_y.append(curr_y)
-        
         if dev_deg != 0: curr_ang += np.radians(dev_deg) * d_val
         deviation_angles.append(dev_deg); directions.append(d_val)
 
@@ -117,43 +124,35 @@ def generate_solid_geometry(lengths, angles, dirs, thickness, inner_radius):
     
     for i in range(len(lengths)):
         flat_len = max(0.0, lengths[i] - setbacks[i] - setbacks[i+1])
-        
-        dx = flat_len * np.cos(curr_da)
-        dy = flat_len * np.sin(curr_da)
+        dx = flat_len * np.cos(curr_da); dy = flat_len * np.sin(curr_da)
         nx, ny = np.sin(curr_da), -np.cos(curr_da)
         
-        # Parça Çizimi
         top_x.append(curr_px + dx); top_y.append(curr_py + dy)
         bot_x.append(curr_px + dx + nx*thickness); bot_y.append(curr_py + dy + ny*thickness)
         
-        # Büküm merkezi kaydı
         if i < len(angles):
             bend_centers.append({'x': curr_px + dx, 'y': curr_py + dy, 'angle_cumulative': curr_da})
 
         curr_px += dx; curr_py += dy
         
-        # Radius Dönüşü
         if i < len(angles) and deviation_angles[i] > 0:
             dev = dev_rads[i]; d_val = directions[i]
-            if d_val == 1: # UP
+            if d_val == 1:
                 cx = curr_px - nx * inner_radius; cy = curr_py - ny * inner_radius
                 r_t, r_b = inner_radius, outer_radius
                 sa, ea = curr_da - np.pi/2, curr_da - np.pi/2 + dev
-            else: # DOWN
+            else:
                 cx = curr_px + nx * outer_radius; cy = curr_py + ny * outer_radius
                 r_t, r_b = outer_radius, inner_radius
                 sa, ea = curr_da + np.pi/2, curr_da + np.pi/2 - dev
-            
             theta = np.linspace(sa, ea, 10)
             top_x.extend(cx + r_t * np.cos(theta)); top_y.extend(cy + r_t * np.sin(theta))
             bot_x.extend(cx + r_b * np.cos(theta)); bot_y.extend(cy + r_b * np.sin(theta))
-            
             curr_px, curr_py = top_x[-1], top_y[-1]
             curr_da += dev * d_val
 
     final_x = top_x + bot_x[::-1] + [top_x[0]]
     final_y = top_y + bot_y[::-1] + [top_y[0]]
-    
     return final_x, final_y, apex_x, apex_y, directions, bend_centers
 
 def align_geometry_to_bend(x_pts, y_pts, center_x, center_y, angle_cum, bend_angle, bend_dir, thickness):
@@ -163,7 +162,6 @@ def align_geometry_to_bend(x_pts, y_pts, center_x, center_y, angle_cum, bend_ang
     rotation = -angle_cum
     if bend_dir == "UP": rotation += np.radians(dev / 2) - np.pi/2
     else: rotation -= np.radians(dev / 2) + np.pi/2
-    
     cos_t, sin_t = np.cos(rotation), np.sin(rotation)
     rotated_x, rotated_y = [], []
     for i in range(len(new_x)):
@@ -184,30 +182,29 @@ def add_smart_dims(fig, px, py, lengths):
         d1 = p1 + normal * dim_offset
         d2 = p2 + normal * dim_offset
         mid = (d1 + d2) / 2
-        
-        # Çizgiler
         fig.add_trace(go.Scatter(x=[p1[0], d1[0], None, p2[0], d2[0]], y=[p1[1], d1[1], None, p2[1], d2[1]], mode='lines', line=dict(color='gray', width=1, dash='dot'), hoverinfo='skip'))
         fig.add_trace(go.Scatter(x=[d1[0], d2[0]], y=[d1[1], d2[1]], mode='lines+markers', marker=dict(symbol='arrow', size=8, angleref='previous', color='black'), line=dict(color='black'), hoverinfo='skip'))
-        # Metin
-        fig.add_annotation(x=mid[0], y=mid[1], text=f"<b>{lengths[i]:.1f}</b>", showarrow=False, font=dict(color="#B22222", size=14), bgcolor="white")
+        fig.add_annotation(x=mid[0], y=mid[1], text=f"<b>{lengths[i]:.1f}</b>", showarrow=False, font=dict(color="#B22222", size=12), bgcolor="white")
 
-# --- 6. SIDEBAR ---
+# --- 6. SIDEBAR (DÜZELTİLDİ: FORMAT PARAMETRESİ TEMİZLENDİ) ---
 with st.sidebar:
     st.header("⚙️ Ayarlar")
     sel_punch = st.selectbox("Üst Bıçak", list(TOOL_DB["punches"].keys()))
     sel_die = st.selectbox("Alt Kalıp", list(TOOL_DB["dies"].keys()))
     c1, c2 = st.columns(2)
-    th = c1.number_input("Kalınlık", min_value=0.1, value=2.0, step=0.1)
-    rad = c2.number_input("Radius", min_value=0.5, value=0.8, step=0.1)
+    
+    # HATA ÇÖZÜMÜ: format="%.2f mm" yerine format="%.2f" yapıldı. Birim başlığa yazıldı.
+    th = c1.number_input("Kalınlık (mm)", min_value=0.1, value=2.0, step=0.1, format="%.2f")
+    rad = c2.number_input("Radius (mm)", min_value=0.5, value=0.8, step=0.1, format="%.2f")
     
     st.markdown("---")
     st.subheader("Büküm Adımları")
-    st.session_state.bending_data["lengths"][0] = st.number_input("L0", value=float(st.session_state.bending_data["lengths"][0]), step=0.1, key="l0")
+    st.session_state.bending_data["lengths"][0] = st.number_input("L0 (mm)", value=float(st.session_state.bending_data["lengths"][0]), step=0.1, key="l0", format="%.2f")
     for i in range(len(st.session_state.bending_data["angles"])):
         st.markdown(f"**{i+1}. Büküm**")
         cl, ca, cd = st.columns([1.2, 1, 1.2])
-        st.session_state.bending_data["lengths"][i+1] = cl.number_input("L", value=float(st.session_state.bending_data["lengths"][i+1]), step=0.1, key=f"l{i+1}")
-        st.session_state.bending_data["angles"][i] = ca.number_input("A", value=float(st.session_state.bending_data["angles"][i]), step=1.0, max_value=180.0, key=f"a{i}")
+        st.session_state.bending_data["lengths"][i+1] = cl.number_input("L (mm)", value=float(st.session_state.bending_data["lengths"][i+1]), step=0.1, key=f"l{i+1}", format="%.2f")
+        st.session_state.bending_data["angles"][i] = ca.number_input("A (°)", value=float(st.session_state.bending_data["angles"][i]), step=1.0, max_value=180.0, key=f"a{i}", format="%.2f")
         idx = 0 if st.session_state.bending_data["dirs"][i]=="UP" else 1
         st.session_state.bending_data["dirs"][i] = cd.selectbox("Yön", ["UP", "DOWN"], index=idx, key=f"d{i}")
     
@@ -227,12 +224,9 @@ tab1, tab2 = st.tabs(["📐 Teknik Resim", "🎬 Makine Simülasyonu"])
 with tab1:
     st.markdown(f"""<div class="result-card"><div class="result-value">AÇINIM: {flat:.2f} mm</div><small>Dış Toplam: {total:.1f}</small></div>""", unsafe_allow_html=True)
     fig = go.Figure()
-    # Katı Model
     fig.add_trace(go.Scatter(x=sx, y=sy, fill='toself', fillcolor='rgba(70, 130, 180, 0.4)', line=dict(color='#004a80', width=2), mode='lines'))
-    # Ölçüler (Apex Noktalarına Göre)
     add_smart_dims(fig, ax, ay, cur_l)
     
-    # KİLİTLİ ZOOM VE DÜZGÜN ORAN (ESNEME YOK)
     fig.update_layout(
         height=600, 
         plot_bgcolor="white",
@@ -285,13 +279,9 @@ with tab2:
                  c_dat = s_centers[0]
                  fs_x, fs_y = [x - c_dat['x'] for x in s_x], [y - c_dat['y'] for y in s_y]
             
-            # --- PLOTLY SİMÜLASYON ---
             f_sim = go.Figure()
-            
-            # 1. Sac
             f_sim.add_trace(go.Scatter(x=fs_x, y=fs_y, fill='toself', fillcolor='rgba(220, 38, 38, 0.9)', line=dict(color='#991b1b', width=2), name='Sac'))
             
-            # 2. Resimler (PNG) - Klasörden Okuma
             try:
                 # Alt Kalıp
                 die_d = TOOL_DB["dies"][sel_die]
@@ -308,13 +298,11 @@ with tab2:
                 hold_src = get_local_image(hold_d["filename"])
                 if hold_src: f_sim.add_layout_image(dict(source=hold_src, x=0, y=current_stroke_y + punch_d["height_mm"], sizex=hold_d["width_mm"], sizey=hold_d["height_mm"], xanchor="center", yanchor="bottom", layer="above"))
             except Exception as e:
-                # Resim yüklenemezse hata basma, sadece sacı göster
                 pass
 
             info = "Hazırlık" if curr_idx == 0 else f"Adım {curr_idx}"
             f_sim.update_layout(
                 title=dict(text=info, x=0.5), height=600, plot_bgcolor="#f1f5f9",
-                # Simülasyon ekranında da zoom kilidi ve oran koruma
                 xaxis=dict(visible=False, range=[-150, 150], fixedrange=True),
                 yaxis=dict(visible=False, range=[-100, 250], fixedrange=True, scaleanchor="x", scaleratio=1),
                 showlegend=False, margin=dict(l=0, r=0, t=40, b=0)
