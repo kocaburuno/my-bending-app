@@ -22,25 +22,23 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# --- DEBUG: DOSYA KONTROLÜ (SOL MENÜNÜN EN ALTINDA GÖRÜNECEK) ---
-# Bu kısım, sunucuda assets klasörünün ve resimlerin olup olmadığını sana söyleyecek.
+# --- DEBUG: DOSYA KONTROLÜ (SOL MENÜDE) ---
 with st.sidebar:
     st.divider()
-    st.write("📂 **Sistem Kontrolü:**")
+    st.write("📂 **Dosya Durumu:**")
     if os.path.exists("assets"):
-        files = os.listdir("assets")
-        st.info(f"Assets klasörü bulundu.\nDosyalar: {len(files)} adet")
+        found_files = os.listdir("assets")
+        # Kritik dosyalar
+        req_files = ["die_v120.png", "holder.png", "punch_gooseneck.png", "punch_std.png"]
+        missing = [f for f in req_files if f not in found_files]
         
-        # Kritik dosyaların kontrolü
-        required_files = ["die_v120.png", "holder.png", "punch_gooseneck.png", "punch_std.png"]
-        missing_files = [f for f in required_files if f not in files]
-        
-        if missing_files:
-            st.error(f"🚨 EKSİK DOSYALAR: {missing_files}")
+        if len(missing) == 0:
+            st.success("✅ Tüm PNG dosyaları yüklü ve hazır.")
         else:
-            st.success("✅ Tüm resim dosyaları mevcut.")
+            st.error(f"🚨 EKSİK DOSYALAR: {missing}")
+            st.info(f"Bulunanlar: {found_files}")
     else:
-        st.error("🚨 HATA: 'assets' klasörü bulunamadı! Github'da ana dizinde olduğundan emin olun.")
+        st.error("🚨 'assets' klasörü sunucuda bulunamadı!")
 
 # --- 2. RESİM OKUYUCU FONKSİYON ---
 def get_local_image(filename):
@@ -52,7 +50,7 @@ def get_local_image(filename):
         encoded = base64.b64encode(f.read()).decode()
     return f"data:image/png;base64,{encoded}"
 
-# --- 3. KALIP VERİTABANI (İSİM DÜZELTİLDİ) ---
+# --- 3. KALIP VERİTABANI (RESMİ BOYUTLARI VE İSİMLERİ) ---
 TOOL_DB = {
     "holder": {
         "filename": "holder.png", 
@@ -73,8 +71,7 @@ TOOL_DB = {
     },
     "dies": {
         "120x120 (Standart)": {
-            # DÜZELTME: Github'daki dosya isminiz "die_v120.png"
-            "filename": "die_v120.png", 
+            "filename": "die_v120.png",  # Yüklediğin dosya ismi
             "width_mm": 60.0,
             "height_mm": 60.0
         }
@@ -85,7 +82,7 @@ TOOL_DB = {
 if "bending_data" not in st.session_state:
     st.session_state.bending_data = {"lengths": [100.0, 100.0], "angles": [90.0], "dirs": ["UP"]}
 
-# --- 5. HESAPLAMA MOTORLARI ---
+# --- 5. MATEMATİKSEL HESAPLAMALAR (SAC GEOMETRİSİ) ---
 def calculate_flat_len(lengths, angles, thickness):
     total_outer = sum(lengths)
     loss = 0.0
@@ -191,14 +188,13 @@ def add_smart_dims(fig, px, py, lengths):
         fig.add_trace(go.Scatter(x=[d1[0], d2[0]], y=[d1[1], d2[1]], mode='lines+markers', marker=dict(symbol='arrow', size=8, angleref='previous', color='black'), line=dict(color='black'), hoverinfo='skip'))
         fig.add_annotation(x=mid[0], y=mid[1], text=f"<b>{lengths[i]:.1f}</b>", showarrow=False, font=dict(color="#B22222", size=12), bgcolor="white")
 
-# --- 6. SIDEBAR (DÜZELTİLDİ: "mm" İFADELERİ KALDIRILDI) ---
+# --- 6. SIDEBAR KONTROLLERİ ---
 with st.sidebar:
     st.header("⚙️ Ayarlar")
     sel_punch = st.selectbox("Üst Bıçak", list(TOOL_DB["punches"].keys()))
     sel_die = st.selectbox("Alt Kalıp", list(TOOL_DB["dies"].keys()))
     c1, c2 = st.columns(2)
     
-    # HATA ÇÖZÜLDÜ: format="%.2f" yapıldı.
     th = c1.number_input("Kalınlık (mm)", min_value=0.1, value=2.0, step=0.1, format="%.2f")
     rad = c2.number_input("Radius (mm)", min_value=0.5, value=0.8, step=0.1, format="%.2f")
     
@@ -217,7 +213,7 @@ with st.sidebar:
     if st.button("➕ EKLE"): st.session_state.bending_data["lengths"].append(50.0); st.session_state.bending_data["angles"].append(90.0); st.session_state.bending_data["dirs"].append("UP"); st.rerun()
     if st.button("🗑️ SİL"): st.session_state.bending_data["lengths"].pop(); st.session_state.bending_data["angles"].pop(); st.session_state.dirs.pop(); st.rerun()
 
-# --- 7. ANA EKRAN ---
+# --- 7. ANA EKRAN VE SİMÜLASYON ---
 cur_l = st.session_state.bending_data["lengths"]
 cur_a = st.session_state.bending_data["angles"]
 cur_d = st.session_state.bending_data["dirs"]
@@ -285,28 +281,56 @@ with tab2:
                  fs_x, fs_y = [x - c_dat['x'] for x in s_x], [y - c_dat['y'] for y in s_y]
             
             f_sim = go.Figure()
-            f_sim.add_trace(go.Scatter(x=fs_x, y=fs_y, fill='toself', fillcolor='rgba(220, 38, 38, 0.9)', line=dict(color='#991b1b', width=2), name='Sac'))
             
-            # --- RESİMLERİ YÜKLEME ---
+            # --- SAC (ÖNCE ÇİZİLİR AMA PLOTLY'DE 'layer=below' OLANLAR ARKADA KALIR) ---
+            # Biz resimlerin sacın arkasında kalmasını istiyoruz, bu yüzden resimlere 'below' diyeceğiz.
+            f_sim.add_trace(go.Scatter(x=fs_x, y=fs_y, fill='toself', fillcolor='rgba(220, 38, 38, 0.9)', line=dict(color='#991b1b', width=3), name='Sac'))
+            
+            # --- PNG RESİMLERİN YERLEŞTİRİLMESİ ---
             try:
-                # Alt Kalıp
+                # 1. ALT KALIP (SABİT)
                 die_d = TOOL_DB["dies"][sel_die]
                 die_src = get_local_image(die_d["filename"])
-                if die_src: f_sim.add_layout_image(dict(source=die_src, x=0, y=0, sizex=die_d["width_mm"], sizey=die_d["height_mm"], xanchor="center", yanchor="top", layer="above"))
-                else: st.toast(f"Kalıp görseli bulunamadı: {die_d['filename']}")
+                if die_src: 
+                    f_sim.add_layout_image(
+                        dict(
+                            source=die_src, 
+                            x=0, y=0, 
+                            sizex=die_d["width_mm"], sizey=die_d["height_mm"], 
+                            xanchor="center", yanchor="top", 
+                            layer="below" # Sacın arkasında kalsın
+                        )
+                    )
 
-                # Bıçak
+                # 2. BIÇAK (HAREKETLİ) - UC NOKTASI REFERANS
                 punch_d = TOOL_DB["punches"][sel_punch]
                 punch_src = get_local_image(punch_d["filename"])
-                if punch_src: f_sim.add_layout_image(dict(source=punch_src, x=0, y=current_stroke_y, sizex=punch_d["width_mm"], sizey=punch_d["height_mm"], xanchor="center", yanchor="bottom", layer="above"))
+                if punch_src: 
+                    f_sim.add_layout_image(
+                        dict(
+                            source=punch_src, 
+                            x=0, y=current_stroke_y, 
+                            sizex=punch_d["width_mm"], sizey=punch_d["height_mm"], 
+                            xanchor="center", yanchor="bottom", 
+                            layer="below"
+                        )
+                    )
                 
-                # Tutucu
+                # 3. TUTUCU (HAREKETLİ) - BIÇAK TEPESİ REFERANS
                 hold_d = TOOL_DB["holder"]
                 hold_src = get_local_image(hold_d["filename"])
-                if hold_src: f_sim.add_layout_image(dict(source=hold_src, x=0, y=current_stroke_y + punch_d["height_mm"], sizex=hold_d["width_mm"], sizey=hold_d["height_mm"], xanchor="center", yanchor="bottom", layer="above"))
+                if hold_src: 
+                    f_sim.add_layout_image(
+                        dict(
+                            source=hold_src, 
+                            x=0, y=current_stroke_y + punch_d["height_mm"], 
+                            sizex=hold_d["width_mm"], sizey=hold_d["height_mm"], 
+                            xanchor="center", yanchor="bottom", 
+                            layer="below"
+                        )
+                    )
             except Exception as e:
-                # Resim hatası olursa simülasyonu durdurma
-                pass
+                print(f"Hata: {e}")
 
             info = "Hazırlık" if curr_idx == 0 else f"Adım {curr_idx}"
             f_sim.update_layout(
