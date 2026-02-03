@@ -24,16 +24,19 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# --- 2. KALIP KÜTÜPHANESİ (VERİ TABANI) ---
-# Buraya yeni kalıplar ekleyebilirsiniz.
+# --- 2. KALIP KÜTÜPHANESİ (GÜNCELLENDİ) ---
 TOOL_DB = {
     "top_holder": {
-        "width": 40.0,
-        "height": 100.0
+        "width": 40.0,   # İstenilen 40mm tutucu genişliği
+        "height": 100.0  # Tutucu bloğun görsel yüksekliği
     },
     "punches": {
         "Gooseneck (Deve Boynu)": {
-            "type": "gooseneck", "height": 135.0, "tip_w": 0.8, "max_w": 80.0, "color": "#334155"
+            "type": "gooseneck", 
+            "height": 135.0, # İstenilen 135mm boy
+            "tip_w": 0.8,    # Uç kalınlığı
+            "max_w": 80.0,   # En geniş kısım (Sırt)
+            "color": "#334155"
         },
         "Standart (Balta)": {
             "type": "straight", "height": 120.0, "tip_w": 0.8, "max_w": 20.0, "color": "#475569"
@@ -46,10 +49,7 @@ TOOL_DB = {
         "120x120 (Standart)": {"w": 120.0, "h": 120.0},
         "100x100 (Orta)":     {"w": 100.0, "h": 100.0},
         "80x80 (Küçük)":      {"w": 80.0,  "h": 80.0},
-        "60x60 (Mini)":       {"w": 60.0,  "h": 60.0},
-        "150x150 (Büyük)":    {"w": 150.0, "h": 150.0},
-        "200x200 (Jumbo)":    {"w": 200.0, "h": 200.0},
-        "Özel Blok":          {"w": 120.0, "h": 120.0} # Kullanıcı düzenleyebilir
+        "150x150 (Büyük)":    {"w": 150.0, "h": 150.0}
     }
 }
 
@@ -188,113 +188,94 @@ def align_geometry_to_bend(x_pts, y_pts, center_x, center_y, angle_cum, bend_ang
 # --- 7. MAKİNE PARÇALARI (DİNAMİK ÇİZİM) ---
 def get_machine_parts(th, punch_name, die_name, stroke_offset=0):
     """
-    th: Sac Kalınlığı
-    punch_name: Seçilen bıçak tipi
-    die_name: Seçilen kalıp tipi
-    stroke_offset: Animasyon için bıçağın Y konumu
+    Düzeltilmiş Gooseneck ve Makine Parçaları Çizimi
     """
     
-    # --- 1. ALT KALIP (DIE) ---
+    # 1. ALT KALIP (DIE)
     die_data = TOOL_DB["dies"].get(die_name, TOOL_DB["dies"]["120x120 (Standart)"])
     die_w = die_data["w"]
     die_h = die_data["h"]
     
-    # V Kanalı (Operatör uyarısı kuralına göre: 12 x T)
+    # V Kanal Hesabı
     v_opening = th * 12.0
-    # V Derinliği (88 derece standart açı için trigonometrik hesap)
-    # Derinlik = (V_Genislik / 2) * tan(60) yaklaşık olarak V/2 * 1.73
-    # Ancak kalıbın dibini delmemesi için güvenlik sınırı koyuyoruz
-    v_depth = (v_opening / 2.0) * np.tan(np.radians(44)) + 2 # +2mm radyus payı
-    if v_depth > die_h * 0.7: v_depth = die_h * 0.7 
+    v_depth = (v_opening / 2.0) * np.tan(np.radians(44)) + 2
+    if v_depth > die_h * 0.75: v_depth = die_h * 0.75
     
     die_x = [-die_w/2, -v_opening/2, 0, v_opening/2, die_w/2, die_w/2, -die_w/2, -die_w/2]
     die_y = [0, 0, -v_depth, 0, 0, -die_h, -die_h, 0]
     
-    # --- 2. ÜST TUTUCU (HOLDER) - Mavi Blok ---
-    # Sabit ölçüler: 40mm genişlik, 100mm yükseklik
+    # 2. ÜST TUTUCU (HOLDER)
     holder_data = TOOL_DB["top_holder"]
     hw, hh = holder_data["width"], holder_data["height"]
     
-    # --- 3. ÜST BIÇAK (PUNCH) ---
+    # 3. ÜST BIÇAK (PUNCH)
     p_data = TOOL_DB["punches"].get(punch_name, TOOL_DB["punches"]["Standart (Balta)"])
-    ph = p_data["height"] # 135 mm (Gooseneck için)
-    pw_max = p_data["max_w"] # 80 mm
+    ph = p_data["height"]
+    pw_max = p_data["max_w"]
+    tip_w = p_data.get("tip_w", 0.5)
     
-    # Büküm anında (stroke_offset=0), bıçak ucu sacın üstünde (y=th) durmalı
+    # Animasyon için Y konumu
     current_y = th + stroke_offset
     
     punch_x, punch_y = [], []
     
     if p_data["type"] == "gooseneck":
-        # --- DOĞRU GOOSENECK GEOMETRİSİ ---
-        # Saat yönünde sırayla noktaları tanımlıyoruz:
-        # 1. Uç (Tip) -> 2. Sağ Yanak -> 3. Sağ Omuz -> 4. Üst Sap (Sağ) -> 
-        # 5. Üst Sap (Sol) -> 6. Sol Omuz -> 7. Sol Geniş Gövde -> 8. Boyun Oyuğu -> 9. Uç
+        # --- DÜZELTİLMİŞ GOOSENECK GEOMETRİSİ ---
+        # Sıralama: Uç(0,0) -> Sağ Taraf -> Tutucu -> Sol Taraf (Sırt) -> Boğaz -> Uç
         
-        tip_w = 1.0 # Uç kalınlığı
-        
-        # X Koordinatları (Merkez 0)
+        # X Koordinatları
         punch_x = [
-            0,          # 1. Uç Noktası
-            tip_w,      # 2. Uç Hafif Sağ
-            10,         # 3. Sağ Yüzey (Gövdeye geçiş)
-            10,         # 4. Sağ Yüzey Düz çıkış
-            hw/2,       # 5. Tutucu genişliğine genişleme (Sağ)
-            hw/2,       # 6. Tutucu Tepesi (Sağ)
-            -hw/2,      # 7. Tutucu Tepesi (Sol)
-            -hw/2,      # 8. Tutucu Altı (Sol)
-            -pw_max + 10, # 9. En geniş kısma gidiş (Sırt)
-            -pw_max + 10, # 10. Sırt düzlüğü
-            -15,        # 11. DERİN OYUK (Boğaz) - Burası kritik
-            -2,         # 12. Uç arkası
-            0           # 13. Kapanış
+            0,              # 1. Uç (Merkez)
+            tip_w,          # 2. Uç Pahı (Sağ)
+            5,              # 3. Sağ Yanak Alt
+            5,              # 4. Sağ Yanak Üst (Tutucu altı)
+            hw/2,           # 5. Tutucu Sağ Köşe
+            hw/2,           # 6. Tutucu Sağ Üst
+            -hw/2,          # 7. Tutucu Sol Üst
+            -hw/2,          # 8. Tutucu Sol Köşe
+            -pw_max + 10,   # 9. Sırt (Genişleme başlangıcı)
+            -pw_max,        # 10. Sırt (En geniş nokta)
+            -pw_max + 5,    # 11. Sırt Altı
+            -20,            # 12. BOĞAZ (Derin oyuk - U Büküm için)
+            -tip_w,         # 13. Uç Pahı (Sol)
+            0               # 14. Kapanış
         ]
         
-        # Y Koordinatları (Uç 0 kabul edilip current_y eklenir)
-        # Yükseklikler parçalı olarak tanımlanıyor
+        # Y Koordinatları (Uçtan yüksekliğe göre)
         rel_y = [
-            0,          # 1. Uç
-            2,          # 2. Uç pahı
-            30,         # 3. Sağ yüzey başlangıcı
-            ph - 20,    # 4. Sağ omuz altı
-            ph - 15,    # 5. Omuz
-            ph,         # 6. Tepe
-            ph,         # 7. Tepe
-            ph - 15,    # 8. Omuz
-            80,         # 9. Sırt (Geniş kısım üst)
-            50,         # 10. Sırt (Geniş kısım alt)
-            35,         # 11. BOĞAZ (En derin nokta)
-            10,         # 12. Uç arkası
-            0           # 13. Kapanış
+            0,              # 1. Uç
+            2,              # 2. Pah
+            40,             # 3. Sağ Yanak Alt
+            ph,             # 4. Sağ Yanak Üst (Tutucuya değdiği yer)
+            ph,             # 5. Tutucu Sağ
+            ph + 20,        # 6. (Görsel uzatma - tutucu içine giriş)
+            ph + 20,        # 7. (Görsel uzatma)
+            ph,             # 8. Tutucu Sol
+            80,             # 9. Sırt Üst
+            60,             # 10. Sırt Orta (En geniş)
+            45,             # 11. Sırt Alt
+            25,             # 12. BOĞAZ (Derinlik)
+            2,              # 13. Pah
+            0               # 14. Kapanış
         ]
         
+        # Bıçağı mevcut konumuna taşı
         punch_y = [y + current_y for y in rel_y]
         
+        # Tutucu Konumu (Bıçağın 135mm tepesinden başlar)
+        holder_base_y = current_y + ph
+        holder_x = [-hw/2, hw/2, hw/2, -hw/2, -hw/2]
+        holder_y = [holder_base_y, holder_base_y, holder_base_y + hh, holder_base_y + hh, holder_base_y]
+
     else:
-        # --- STANDART BALTA BIÇAK ---
-        # Basit "V" veya kama şekli
-        top_w = hw # Tutucuya giren kısım
-        
-        punch_x = [
-            0,          # Uç
-            2,          # Sağ pah
-            top_w/2,    # Sağ üst
-            top_w/2,    # Sağ tepe
-            -top_w/2,   # Sol tepe
-            -top_w/2,   # Sol üst
-            -2,         # Sol pah
-            0           # Uç
-        ]
-        
-        rel_y = [
-            0, 5, ph-10, ph, ph, ph-10, 5, 0
-        ]
+        # Standart Bıçak (Balta)
+        punch_x = [0, tip_w, pw_max/2, pw_max/2, -pw_max/2, -pw_max/2, -tip_w, 0]
+        rel_y =   [0, 2,     ph-10,    ph,       ph,        ph-10,     2,      0]
         punch_y = [y + current_y for y in rel_y]
         
-    # Tutucu Koordinatları (Bıçağın bittiği yerden başlar)
-    holder_base_y = current_y + ph
-    holder_x = [-hw/2, hw/2, hw/2, -hw/2, -hw/2]
-    holder_y = [holder_base_y, holder_base_y, holder_base_y + hh, holder_base_y + hh, holder_base_y]
+        holder_base_y = current_y + ph
+        holder_x = [-hw/2, hw/2, hw/2, -hw/2, -hw/2]
+        holder_y = [holder_base_y, holder_base_y, holder_base_y + hh, holder_base_y + hh, holder_base_y]
     
     return (die_x, die_y), (punch_x, punch_y), (holder_x, holder_y), v_opening
 
