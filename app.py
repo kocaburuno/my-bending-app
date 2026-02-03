@@ -137,33 +137,42 @@ def generate_solid_geometry(lengths, angles, dirs, thickness, inner_radius):
     final_y = top_y + bot_y[::-1] + [top_y[0]]
     return final_x, final_y, apex_x, apex_y, directions, bend_centers
 
-# --- 6. HİZALAMA MOTORU (DÜZELTİLDİ: SİMETRİK V) ---
+# --- 6. HİZALAMA MOTORU (DÜZELTİLDİ: FLIP ÖZELLİĞİ EKLENDİ) ---
 def align_geometry_to_bend(x_pts, y_pts, center_x, center_y, angle_cum, bend_angle, bend_dir, thickness):
-    # Geometriyi büküm merkezine taşı
-    new_x = [x - center_x for x in x_pts]
-    new_y = [y - center_y for y in y_pts]
+    # 1. Geometriyi orijine (büküm merkezine) taşı
+    new_x = np.array(x_pts) - center_x
+    new_y = np.array(y_pts) - center_y
     
-    # 2. Döndürme Açısı (SİMETRİ SAĞLAYAN KRİTİK FORMÜL)
-    # Gelen parçayı, oluşan V açısının yarısı kadar ters yöne döndürür.
-    # Bu sayede V şekli tam Y eksenine ortalanır.
+    is_flipped = False # Takla atıldı mı?
+    
+    # --- FLIP MANTIĞI ---
+    # Eğer büküm YUKARI (UP) ise, gerçek hayatta operatör parçayı çevirir.
+    # Biz de simülasyonda Y eksenini ters çevirip (Mirror), bükümü AŞAĞI (DOWN) gibi işleriz.
+    if bend_dir == "UP":
+        new_y = -new_y  # Aynalama
+        angle_cum = -angle_cum # Ayna alındığı için açı yönü de değişir
+        is_flipped = True
+    
+    # 2. Döndürme Açısı
+    # Parçayı V kanalının ortasına dik hizalamak için:
+    # (180 - büküm açısı) / 2 kadar döndürülür.
     
     rotation_offset = np.radians(180 - bend_angle) / 2.0
     
-    # angle_cum, o anki çizim sapmasını tutar, onu sıfırlayıp (negatifleyip)
-    # üzerine simetri açısını ekliyoruz/çıkarıyoruz.
-    if bend_dir == "UP":
-        rotation = -angle_cum - rotation_offset
-    else:
-        rotation = -angle_cum + rotation_offset
+    # Artık tüm bükümler DOWN mantığıyla çalıştığı için (Flip sayesinde), tek formül yeterli:
+    rotation = -angle_cum + rotation_offset
         
     cos_t, sin_t = np.cos(rotation), np.sin(rotation)
-    rotated_x, rotated_y = [], []
-    for i in range(len(new_x)):
-        rx = new_x[i] * cos_t - new_y[i] * sin_t
-        ry = new_x[i] * sin_t + new_y[i] * cos_t
-        rotated_x.append(rx); rotated_y.append(ry + thickness/2)
+    
+    # Numpy array ile hızlı dönüşüm
+    rotated_x = new_x * cos_t - new_y * sin_t
+    rotated_y = new_x * sin_t + new_y * cos_t
+    
+    # Kalınlık Ofseti: Simülasyonda parça alt kalıbın üstüne basmalı.
+    # Döndürme işlemi orta eksenden yapıldığı için, sacı kalınlık/2 kadar yukarı kaldırıyoruz.
+    rotated_y = rotated_y + (thickness / 2.0)
         
-    return rotated_x, rotated_y
+    return rotated_x.tolist(), rotated_y.tolist(), is_flipped
 
 def add_smart_dims(fig, px, py, lengths):
     dim_offset = 60.0
@@ -241,9 +250,6 @@ with tab2:
         if c_anim.button("▶️ OYNAT"):
             st.session_state.sim_active = True
         
-        # --- DÜZELTME: VARSAYILAN KARE 0.0 (BAŞLANGIÇ) OLMALI ---
-        # Eğer animasyon aktif değilse, adımın BAŞLANGIÇ halini (0.0) göster.
-        # Böylece sac düz (hazırlık modunda) durur, "Play"e basınca bükülür.
         stroke_frames = np.linspace(0, 1, 20) if st.session_state.sim_active else [0.0]
         if st.session_state.sim_step_idx == 0: stroke_frames = [0.0]
 
@@ -268,11 +274,14 @@ with tab2:
             # Geometri Oluşturma
             s_x, s_y, _, _, _, s_centers = generate_solid_geometry(cur_l, temp_angs, cur_d, th, rad)
             
-            # Hizalama (Aktif büküm merkezine göre simetrik)
+            # Hizalama (Aktif büküm merkezine göre simetrik + FLIP Kontrolü)
+            is_flipped = False
+            
             if curr_idx > 0:
                 act_idx = curr_idx - 1
                 c_dat = s_centers[act_idx]
-                fs_x, fs_y = align_geometry_to_bend(s_x, s_y, c_dat['x'], c_dat['y'], c_dat['angle_cumulative'], temp_angs[act_idx], cur_d[act_idx], th)
+                # Dönüş değerini alıyoruz (is_flipped dahil)
+                fs_x, fs_y, is_flipped = align_geometry_to_bend(s_x, s_y, c_dat['x'], c_dat['y'], c_dat['angle_cumulative'], temp_angs[act_idx], cur_d[act_idx], th)
             else:
                  c_dat = s_centers[0]
                  fs_x, fs_y = [x - c_dat['x'] for x in s_x], [y - c_dat['y'] for y in s_y]
@@ -298,7 +307,13 @@ with tab2:
                     f_sim.add_layout_image(dict(source=hold_src, x=0, y=current_stroke_y + punch_d["height_mm"], sizex=hold_d["width_mm"], sizey=hold_d["height_mm"], xanchor="center", yanchor="bottom", layer="below", xref="x", yref="y"))
             except: pass
 
+            # Bilgi Ekranı Güncellemesi
             info = "Hazırlık" if curr_idx == 0 else f"Adım {curr_idx}"
+            
+            # Flip Uyarısı (Eğer parça ters çevrildiyse ekrana yaz)
+            if is_flipped:
+                 f_sim.add_annotation(x=0, y=100, text="🔄 PARÇAYI TERS ÇEVİR (FLIP)", font=dict(size=18, color="blue"), bgcolor="rgba(255,255,255,0.8)", showarrow=False)
+
             f_sim.update_layout(title=dict(text=info, x=0.5), height=600, plot_bgcolor="#f1f5f9", xaxis=dict(visible=False, range=[-150, 150], fixedrange=True), yaxis=dict(visible=False, range=[-100, 250], fixedrange=True, scaleanchor="x", scaleratio=1), showlegend=False, margin=dict(l=0, r=0, t=40, b=0))
             sim_placeholder.plotly_chart(f_sim, use_container_width=True)
             if st.session_state.sim_active: time.sleep(0.05)
