@@ -8,18 +8,14 @@ st.set_page_config(page_title="Büküm Simülasyonu", layout="wide", page_icon="
 
 st.markdown("""
     <style>
-    /* Üst Bar ve Genel Düzen */
+    /* Düzen Ayarları */
     .block-container { padding-top: 4rem !important; padding-bottom: 2rem !important; }
     [data-testid="stSidebar"] .block-container { padding-top: 2rem; }
-    
-    /* Input ve Buton Sıkılaştırma */
     .stNumberInput, .stSelectbox, .stButton { margin-bottom: 5px !important; margin-top: 0px !important; }
     div[data-testid="column"] { align-items: end; }
     
-    /* Etiket Stilleri */
+    /* Etiketler ve Kartlar */
     .compact-label { font-size: 0.85rem; font-weight: 700; color: #31333F; margin-bottom: 4px; display: block; }
-    
-    /* Sonuç Kartı */
     .result-card {
         background-color: #f0f9ff; border: 1px solid #bae6fd; padding: 15px; border-radius: 8px;
         text-align: center; margin-bottom: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);
@@ -40,8 +36,6 @@ if "lengths" not in st.session_state:
     st.session_state.dirs = ["UP"]
 
 def load_preset(new_lengths, new_angles, new_dirs):
-    # HATA ÇÖZÜMÜ: Gelen tüm verileri zorla FLOAT yapıyoruz.
-    # [100, 100] gelse bile [100.0, 100.0] olarak kaydedilecek.
     st.session_state.lengths = [float(x) for x in new_lengths]
     st.session_state.angles = [float(x) for x in new_angles]
     st.session_state.dirs = new_dirs
@@ -59,12 +53,8 @@ def calculate_flat_pattern(lengths, angles, thickness):
     total_deduction = 0
     for ang in angles:
         if ang >= 180: continue
-        # 90 derecede 2*T veya T kadar düşüm (Formül tercihi)
-        # Standart basit hesap: 90 derecede 2T düşülür, diğerlerinde oranlanır.
-        # Sizin isteğiniz üzerine: (180-Açı)/90 * (2*T) 
+        # Basit Kural: 90 derecede 2*T düşülür, diğerlerinde oranlanır.
         deviation = (180.0 - ang) / 90.0
-        # Buradaki katsayıyı atölye standardınıza göre 1.0 * thickness veya 2.0 * thickness yapabilirsiniz.
-        # Genelde dış ölçüden hesaplanıyorsa 2t düşülür.
         deduction_per_bend = (2.0 * thickness) * deviation 
         total_deduction += deduction_per_bend
         
@@ -209,11 +199,12 @@ with st.sidebar:
     c1, c2 = st.columns(2)
     with c1:
         st.markdown('<span class="compact-label">Kalınlık</span>', unsafe_allow_html=True)
-        # HATA FIX: step=0.1 yerine step=0.1 (float)
-        th = st.number_input("th_input", min_value=0.1, max_value=50.0, value=2.0, step=0.1, format="%.2f", label_visibility="collapsed")
+        # HATA DÜZELTME: format parametresi kaldırıldı
+        th = st.number_input("th_input", min_value=0.1, max_value=50.0, value=2.0, step=0.1, label_visibility="collapsed")
     with c2:
         st.markdown('<span class="compact-label">Bıçak Radius</span>', unsafe_allow_html=True)
-        rad = st.number_input("rad_input", min_value=0.8, max_value=50.0, value=0.8, step=0.1, format="%.2f", label_visibility="collapsed")
+        # HATA DÜZELTME: format parametresi kaldırıldı
+        rad = st.number_input("rad_input", min_value=0.8, max_value=50.0, value=0.8, step=0.1, label_visibility="collapsed")
 
     st.markdown("---")
     st.markdown('<span class="compact-label" style="font-size:1em;">🚀 Hızlı Şablonlar</span>', unsafe_allow_html=True)
@@ -228,13 +219,12 @@ with st.sidebar:
     st.markdown('<span class="compact-label" style="font-size:1em;">✏️ Ölçü Girişi</span>', unsafe_allow_html=True)
     st.markdown('<span class="compact-label" style="color:#0068C9; margin-top:10px;">1. Başlangıç Kenarı (mm)</span>', unsafe_allow_html=True)
     
-    # HATA FIX: format="%.2f" eklendi, min_value=1.0 (float) yapıldı.
+    # HATA DÜZELTME: format parametresi kaldırıldı
     st.session_state.lengths[0] = st.number_input(
         "len_0", 
         value=float(st.session_state.lengths[0]), 
         min_value=1.0, 
         step=0.1, 
-        format="%.2f", 
         label_visibility="collapsed"
     )
 
@@ -243,26 +233,24 @@ with st.sidebar:
         c_len, c_ang, c_dir = st.columns([1.3, 1.0, 1.2])
         with c_len:
             st.markdown('<span class="compact-label">Kenar</span>', unsafe_allow_html=True)
-            # HATA FIX: format="%.2f" ve float cast
+            # HATA DÜZELTME: format parametresi kaldırıldı
             st.session_state.lengths[i+1] = st.number_input(
                 f"L{i}", 
                 value=float(st.session_state.lengths[i+1]), 
                 min_value=1.0, 
                 step=0.1, 
-                format="%.2f", 
                 key=f"len_{i+1}", 
                 label_visibility="collapsed"
             )
         with c_ang:
             st.markdown('<span class="compact-label">Açı°</span>', unsafe_allow_html=True)
-            # HATA FIX: format="%.0f" (açı genelde tam sayı tercih edilir ama float saklanır)
+            # HATA DÜZELTME: format parametresi kaldırıldı
             st.session_state.angles[i] = st.number_input(
                 f"A{i}", 
                 value=float(st.session_state.angles[i]), 
                 min_value=1.0, 
                 max_value=180.0, 
                 step=1.0, 
-                format="%.0f", 
                 key=f"ang_{i}", 
                 label_visibility="collapsed"
             )
