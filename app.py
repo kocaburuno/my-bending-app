@@ -35,7 +35,6 @@ def process_and_crop_image(filename):
         return None
     try:
         img = Image.open(path).convert("RGBA")
-        # Beyaz pixelleri şeffaf yap
         datas = img.getdata()
         newData = []
         for item in datas:
@@ -44,10 +43,8 @@ def process_and_crop_image(filename):
             else:
                 newData.append(item)
         img.putdata(newData)
-        # Kırp
         bbox = img.getbbox()
         if bbox: img = img.crop(bbox)
-        # Kaydet
         buffered = BytesIO()
         img.save(buffered, format="PNG")
         return "data:image/png;base64," + base64.b64encode(buffered.getvalue()).decode()
@@ -140,24 +137,24 @@ def generate_solid_geometry(lengths, angles, dirs, thickness, inner_radius):
     final_y = top_y + bot_y[::-1] + [top_y[0]]
     return final_x, final_y, apex_x, apex_y, directions, bend_centers
 
-# --- 6. HİZALAMA MOTORU (DÜZELTİLDİ: YATAY BAŞLANGIÇ) ---
+# --- 6. HİZALAMA MOTORU (DÜZELTİLDİ: SİMETRİK V) ---
 def align_geometry_to_bend(x_pts, y_pts, center_x, center_y, angle_cum, bend_angle, bend_dir, thickness):
-    # 1. Geometriyi merkeze taşı
+    # Geometriyi büküm merkezine taşı
     new_x = [x - center_x for x in x_pts]
     new_y = [y - center_y for y in y_pts]
     
-    # 2. Döndürme Açısı Hesabı (KRİTİK DÜZELTME)
-    # Eski hali: Sabit -90 derece ekliyordu, bu da 180 derecede dikey yapıyordu.
-    # Yeni hali: -angle_cum yaparak önce sacı sıfıra (yataya) çekiyoruz.
-    # Sonra büküm açısının yarısı kadar kaldırıyoruz.
+    # 2. Döndürme Açısı (SİMETRİ SAĞLAYAN KRİTİK FORMÜL)
+    # Gelen parçayı, oluşan V açısının yarısı kadar ters yöne döndürür.
+    # Bu sayede V şekli tam Y eksenine ortalanır.
     
-    base_rotation = -angle_cum  # Bu sacı tamamen yatay yapar
-    bend_lift = np.radians(180 - bend_angle) / 2 # Kolların havaya kalkma açısı
+    rotation_offset = np.radians(180 - bend_angle) / 2.0
     
+    # angle_cum, o anki çizim sapmasını tutar, onu sıfırlayıp (negatifleyip)
+    # üzerine simetri açısını ekliyoruz/çıkarıyoruz.
     if bend_dir == "UP":
-        rotation = base_rotation + bend_lift
+        rotation = -angle_cum - rotation_offset
     else:
-        rotation = base_rotation - bend_lift
+        rotation = -angle_cum + rotation_offset
         
     cos_t, sin_t = np.cos(rotation), np.sin(rotation)
     rotated_x, rotated_y = [], []
@@ -185,11 +182,9 @@ def add_smart_dims(fig, px, py, lengths):
 # --- 7. SIDEBAR ---
 with st.sidebar:
     st.header("⚙️ Ayarlar")
-    # Dosya Kontrol
     with st.expander("🛠️ Dosya Durumu", expanded=False):
         if os.path.exists(ASSETS_DIR):
-            files = os.listdir(ASSETS_DIR)
-            st.success(f"Assets OK ({len(files)} dosya)")
+            st.success(f"Assets OK ({len(os.listdir(ASSETS_DIR))} dosya)")
         else:
             st.error("Assets YOK!")
 
@@ -228,7 +223,6 @@ with tab1:
     fig = go.Figure()
     fig.add_trace(go.Scatter(x=sx, y=sy, fill='toself', fillcolor='rgba(70, 130, 180, 0.4)', line=dict(color='#004a80', width=2), mode='lines'))
     add_smart_dims(fig, ax, ay, cur_l)
-    
     fig.update_layout(height=600, plot_bgcolor="white", yaxis=dict(scaleanchor="x", scaleratio=1, visible=False), xaxis=dict(visible=False), margin=dict(l=20, r=20, t=20, b=20))
     st.plotly_chart(fig, use_container_width=True)
 
@@ -247,14 +241,19 @@ with tab2:
         if c_anim.button("▶️ OYNAT"):
             st.session_state.sim_active = True
         
-        stroke_frames = np.linspace(0, 1, 15) if st.session_state.sim_active else [1.0]
+        # --- DÜZELTME: VARSAYILAN KARE 0.0 (BAŞLANGIÇ) OLMALI ---
+        # Eğer animasyon aktif değilse, adımın BAŞLANGIÇ halini (0.0) göster.
+        # Böylece sac düz (hazırlık modunda) durur, "Play"e basınca bükülür.
+        stroke_frames = np.linspace(0, 1, 20) if st.session_state.sim_active else [0.0]
         if st.session_state.sim_step_idx == 0: stroke_frames = [0.0]
 
         sim_placeholder = st.empty()
         
         for fr in stroke_frames:
+            # Stroke hareketi
             current_stroke_y = (1.0 - fr) * 200.0 + th
             
+            # Açı interpolasyonu (Hazırlıktan Hedefe)
             temp_angs = [180.0] * len(cur_a)
             curr_idx = st.session_state.sim_step_idx
             
@@ -262,11 +261,14 @@ with tab2:
                 if k < curr_idx - 1: temp_angs[k] = cur_a[k]
                 elif k == curr_idx - 1: 
                     target = cur_a[k]
+                    # fr=0 -> 180 (Düz), fr=1 -> Target (Bükük)
                     temp_angs[k] = 180.0 - (180.0 - target) * fr
                 else: temp_angs[k] = 180.0
             
+            # Geometri Oluşturma
             s_x, s_y, _, _, _, s_centers = generate_solid_geometry(cur_l, temp_angs, cur_d, th, rad)
             
+            # Hizalama (Aktif büküm merkezine göre simetrik)
             if curr_idx > 0:
                 act_idx = curr_idx - 1
                 c_dat = s_centers[act_idx]
@@ -278,27 +280,23 @@ with tab2:
             f_sim = go.Figure()
             f_sim.add_trace(go.Scatter(x=fs_x, y=fs_y, fill='toself', fillcolor='rgba(220, 38, 38, 0.9)', line=dict(color='#991b1b', width=3), name='Sac'))
             
-            # --- PNG GÖRSELLER (OTOMATİK KIRPILMIŞ) ---
+            # Resimler (Otomatik Kırpılmış)
             try:
-                # 1. ALT KALIP
                 die_d = TOOL_DB["dies"][sel_die]
                 die_src = process_and_crop_image(die_d["filename"])
                 if die_src: 
                     f_sim.add_layout_image(dict(source=die_src, x=0, y=0, sizex=die_d["width_mm"], sizey=die_d["height_mm"], xanchor="center", yanchor="top", layer="below", xref="x", yref="y"))
                 
-                # 2. BIÇAK
                 punch_d = TOOL_DB["punches"][sel_punch]
                 punch_src = process_and_crop_image(punch_d["filename"])
                 if punch_src: 
                     f_sim.add_layout_image(dict(source=punch_src, x=0, y=current_stroke_y, sizex=punch_d["width_mm"], sizey=punch_d["height_mm"], xanchor="center", yanchor="bottom", layer="below", xref="x", yref="y"))
                 
-                # 3. TUTUCU
                 hold_d = TOOL_DB["holder"]
                 hold_src = process_and_crop_image(hold_d["filename"])
                 if hold_src: 
                     f_sim.add_layout_image(dict(source=hold_src, x=0, y=current_stroke_y + punch_d["height_mm"], sizex=hold_d["width_mm"], sizey=hold_d["height_mm"], xanchor="center", yanchor="bottom", layer="below", xref="x", yref="y"))
-            except:
-                pass
+            except: pass
 
             info = "Hazırlık" if curr_idx == 0 else f"Adım {curr_idx}"
             f_sim.update_layout(title=dict(text=info, x=0.5), height=600, plot_bgcolor="#f1f5f9", xaxis=dict(visible=False, range=[-150, 150], fixedrange=True), yaxis=dict(visible=False, range=[-100, 250], fixedrange=True, scaleanchor="x", scaleratio=1), showlegend=False, margin=dict(l=0, r=0, t=40, b=0))
