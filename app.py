@@ -74,7 +74,6 @@ if "sequence" not in st.session_state:
     st.session_state.sequence = "1, 2"
 
 # --- 5. HESAPLAMA MOTORLARI ---
-
 def calculate_flat_len(lengths, angles, thickness):
     total_outer = sum(lengths)
     loss = 0.0
@@ -84,28 +83,18 @@ def calculate_flat_len(lengths, angles, thickness):
             loss += (1.8 * thickness) * dev 
     return total_outer - loss, total_outer
 
-# --- 5.1 TEKNİK RESİM İÇİN STATİK GEOMETRİ (ESKİ SİSTEM) ---
 def generate_static_geometry(lengths, angles, dirs, thickness):
-    """
-    Sadece Teknik Resim (Tab 1) için hedef parçayı çizer.
-    Simülasyon mantığından bağımsızdır, parçanın bitmiş halini gösterir.
-    """
+    """Teknik Resim için statik geometri (değişmedi)."""
     x_pts, y_pts = [0.0], [0.0]
     curr_ang = 0.0
-    
-    # Köşe noktaları (polyline)
     apex_x, apex_y = [0.0], [0.0]
     
     for i in range(len(lengths)):
         L = lengths[i]
-        
-        # Bir sonraki nokta
         nx = x_pts[-1] + L * np.cos(curr_ang)
         ny = y_pts[-1] + L * np.sin(curr_ang)
-        x_pts.append(nx)
-        y_pts.append(ny)
-        apex_x.append(nx)
-        apex_y.append(ny)
+        x_pts.append(nx); y_pts.append(ny)
+        apex_x.append(nx); apex_y.append(ny)
         
         if i < len(angles):
             u_ang = angles[i]
@@ -113,10 +102,7 @@ def generate_static_geometry(lengths, angles, dirs, thickness):
             dev_deg = (180.0 - u_ang)
             curr_ang += np.radians(dev_deg) * d_val
 
-    # Kalınlık ekleme (Görsel Offset)
-    outer_x, outer_y = [], []
-    inner_x, inner_y = [], []
-    
+    outer_x, outer_y, inner_x, inner_y = [], [], [], []
     for i in range(len(x_pts)-1):
         p1 = np.array([x_pts[i], y_pts[i]])
         p2 = np.array([x_pts[i+1], y_pts[i+1]])
@@ -124,7 +110,6 @@ def generate_static_geometry(lengths, angles, dirs, thickness):
         if np.linalg.norm(vec) == 0: continue
         u = vec / np.linalg.norm(vec)
         normal = np.array([-u[1], u[0]])
-        
         outer_x.extend([p1[0] + normal[0]*thickness, p2[0] + normal[0]*thickness])
         outer_y.extend([p1[1] + normal[1]*thickness, p2[1] + normal[1]*thickness])
         inner_x.extend([p1[0], p2[0]])
@@ -132,61 +117,61 @@ def generate_static_geometry(lengths, angles, dirs, thickness):
 
     final_x = outer_x + inner_x[::-1] + [outer_x[0]]
     final_y = outer_y + inner_y[::-1] + [outer_y[0]]
-    
     return final_x, final_y, apex_x, apex_y
 
 def add_smart_dims(fig, px, py, lengths):
-    """Teknik resim üzerine akıllı ölçü çizgileri ekler."""
     dim_offset = 40.0
     for i in range(len(lengths)):
-        p1 = np.array([px[i], py[i]])
-        p2 = np.array([px[i+1], py[i+1]])
+        p1 = np.array([px[i], py[i]]); p2 = np.array([px[i+1], py[i+1]])
         vec = p2 - p1
-        norm_val = np.linalg.norm(vec)
-        if norm_val < 0.1: continue
-        
-        u = vec / norm_val
-        normal = np.array([u[1], -u[0]]) # Dışa doğru normal
-        
-        d1 = p1 + normal * dim_offset
-        d2 = p2 + normal * dim_offset
+        if np.linalg.norm(vec) < 0.1: continue
+        u = vec / np.linalg.norm(vec)
+        normal = np.array([u[1], -u[0]])
+        d1 = p1 + normal * dim_offset; d2 = p2 + normal * dim_offset
         mid = (d1 + d2) / 2
-        
-        # Kesikli referans çizgileri
-        fig.add_trace(go.Scatter(x=[p1[0], d1[0], None, p2[0], d2[0]], 
-                                 y=[p1[1], d1[1], None, p2[1], d2[1]], 
-                                 mode='lines', line=dict(color='gray', width=1, dash='dot'), hoverinfo='skip'))
-        
-        # Ölçü Oku
-        fig.add_trace(go.Scatter(x=[d1[0], d2[0]], y=[d1[1], d2[1]], 
-                                 mode='lines+markers', 
-                                 marker=dict(symbol='arrow', size=8, angleref='previous', color='black'), 
-                                 line=dict(color='black'), hoverinfo='skip'))
-        
-        # Yazı
-        fig.add_annotation(x=mid[0], y=mid[1], text=f"<b>{lengths[i]:.1f}</b>", 
-                           showarrow=False, font=dict(color="#B22222", size=12), bgcolor="white")
+        fig.add_trace(go.Scatter(x=[p1[0], d1[0], None, p2[0], d2[0]], y=[p1[1], d1[1], None, p2[1], d2[1]], mode='lines', line=dict(color='gray', width=1, dash='dot'), hoverinfo='skip'))
+        fig.add_trace(go.Scatter(x=[d1[0], d2[0]], y=[d1[1], d2[1]], mode='lines+markers', marker=dict(symbol='arrow', size=8, angleref='previous', color='black'), line=dict(color='black'), hoverinfo='skip'))
+        fig.add_annotation(x=mid[0], y=mid[1], text=f"<b>{lengths[i]:.1f}</b>", showarrow=False, font=dict(color="#B22222", size=12), bgcolor="white")
 
-
-# --- 5.2 SİMÜLASYON MOTORU (YENİ SİSTEM) ---
+# --- 5.2 SİMÜLASYON MOTORU (DÜZELTİLDİ) ---
 def generate_geometry_at_step(lengths, angles, dirs, thickness, radius, seq_order, current_step_idx, progress):
+    """
+    seq_order: [2, 1] gibi büküm sırası (1-based index)
+    current_step_idx: 0 (Hazırlık), 1 (İlk işlem), 2 (İkinci işlem)...
+    """
+    
+    # Başlangıçta hepsi düz (180 derece)
     current_angles = [180.0] * len(angles)
     
-    for step_num in seq_order[:current_step_idx]:
-        idx = step_num - 1
-        if 0 <= idx < len(angles):
-            current_angles[idx] = angles[idx]
-            
     active_bend_idx = -1
     active_dir = "UP"
-    
-    if current_step_idx < len(seq_order):
-        active_bend_idx = seq_order[current_step_idx] - 1
-        if 0 <= active_bend_idx < len(angles):
-            target = angles[active_bend_idx]
-            current_angles[active_bend_idx] = 180.0 - (180.0 - target) * progress
-            active_dir = dirs[active_bend_idx]
 
+    # Eğer Hazırlık (0) adımında değilsek:
+    if current_step_idx > 0:
+        
+        # 1. GEÇMİŞ ADIMLARI UYGULA (Tamamlanmış Bükümler)
+        # current_step_idx 1 ise, seq_order'ın 0. indeksine bakacağız ama o AKTİF olan.
+        # Geçmiş olanlar: seq_order[:current_step_idx - 1]
+        
+        past_steps = seq_order[:current_step_idx - 1]
+        for step_num in past_steps:
+            real_idx = step_num - 1
+            if 0 <= real_idx < len(angles):
+                current_angles[real_idx] = angles[real_idx] # Hedef açıya ulaşmış
+
+        # 2. AKTİF ADIMI UYGULA (Animasyonlu Büküm)
+        # Listeden şu anki adımı çek (index = current_step_idx - 1)
+        if (current_step_idx - 1) < len(seq_order):
+            active_step_num = seq_order[current_step_idx - 1]
+            active_bend_idx = active_step_num - 1
+            
+            if 0 <= active_bend_idx < len(angles):
+                target = angles[active_bend_idx]
+                # İnterpolasyon: 180'den hedefe doğru
+                current_angles[active_bend_idx] = 180.0 - (180.0 - target) * progress
+                active_dir = dirs[active_bend_idx]
+    
+    # --- Geometriyi İnşa Et (Zincirleme) ---
     x_pts, y_pts = [0.0], [0.0]
     curr_ang = 0.0
     bend_coords = [] 
@@ -195,8 +180,7 @@ def generate_geometry_at_step(lengths, angles, dirs, thickness, radius, seq_orde
         L = lengths[i]
         nx = x_pts[-1] + L * np.cos(curr_ang)
         ny = y_pts[-1] + L * np.sin(curr_ang)
-        x_pts.append(nx)
-        y_pts.append(ny)
+        x_pts.append(nx); y_pts.append(ny)
         
         if i < len(current_angles):
             bend_coords.append((nx, ny))
@@ -204,9 +188,8 @@ def generate_geometry_at_step(lengths, angles, dirs, thickness, radius, seq_orde
             dev_deg = (180.0 - current_angles[i])
             curr_ang += np.radians(dev_deg) * d_val
 
-    outer_x, outer_y = [], []
-    inner_x, inner_y = [], []
-    
+    # --- Kalınlık Ekle ---
+    outer_x, outer_y, inner_x, inner_y = [], [], [], []
     for i in range(len(x_pts)-1):
         p1 = np.array([x_pts[i], y_pts[i]])
         p2 = np.array([x_pts[i+1], y_pts[i+1]])
@@ -214,27 +197,27 @@ def generate_geometry_at_step(lengths, angles, dirs, thickness, radius, seq_orde
         if np.linalg.norm(vec) == 0: continue
         u = vec / np.linalg.norm(vec)
         normal = np.array([-u[1], u[0]])
-        
         outer_x.extend([p1[0] + normal[0]*thickness, p2[0] + normal[0]*thickness])
         outer_y.extend([p1[1] + normal[1]*thickness, p2[1] + normal[1]*thickness])
         inner_x.extend([p1[0], p2[0]])
         inner_y.extend([p1[1], p2[1]])
-
+    
     final_x = outer_x + inner_x[::-1] + [outer_x[0]]
     final_y = outer_y + inner_y[::-1] + [outer_y[0]]
 
+    # --- Hizalama (Alignment) ---
     if active_bend_idx != -1:
         cx, cy = bend_coords[active_bend_idx]
         p_start_x, p_start_y = x_pts[active_bend_idx], y_pts[active_bend_idx]
         p_end_x, p_end_y = x_pts[active_bend_idx+1], y_pts[active_bend_idx+1]
-        
-        dx = p_end_x - p_start_x
-        dy = p_end_y - p_start_y
+        dx, dy = p_end_x - p_start_x, p_end_y - p_start_y
         seg_ang = np.arctan2(dy, dx)
         
+        # Merkeze taşı
         final_x = [x - cx for x in final_x]
         final_y = [y - cy for y in final_y]
         
+        # Döndür (Yatay hizala)
         cos_a, sin_a = np.cos(-seg_ang), np.sin(-seg_ang)
         rx, ry = [], []
         for i in range(len(final_x)):
@@ -244,17 +227,17 @@ def generate_geometry_at_step(lengths, angles, dirs, thickness, radius, seq_orde
             ry.append(ny_val)
         final_x, final_y = rx, ry
         
+        # Z-FLIP (Aynalama) - DOWN büküm için
         if active_dir == "DOWN":
-            final_x = [-x for x in final_x]
-            final_y = [-y for y in final_y]
-            final_y = [y + thickness for y in final_y]
+            final_x = [-x for x in final_x] # X Mirror
+            final_y = [-y for y in final_y] # Y Mirror
+            final_y = [y + thickness for y in final_y] # Yükseklik düzeltmesi
             
     return final_x, final_y, active_bend_idx
 
 def check_collision(x_vals, y_vals, punch_w, punch_h, die_w, die_h, current_y_stroke):
     is_collision = False
-    p_left = -punch_w / 2.0 + 2.0
-    p_right = punch_w / 2.0 - 2.0
+    p_left, p_right = -punch_w / 2.0 + 2.0, punch_w / 2.0 - 2.0
     p_bottom = current_y_stroke
     d_left, d_right, d_top = -die_w / 2.0, die_w / 2.0, 0.0
     
@@ -317,27 +300,17 @@ with st.sidebar:
 cur_l = st.session_state.bending_data["lengths"]
 cur_a = st.session_state.bending_data["angles"]
 cur_d = st.session_state.bending_data["dirs"]
-
 flat, total = calculate_flat_len(cur_l, cur_a, th)
 
 tab1, tab2 = st.tabs(["📐 Teknik Resim (2D)", "🎬 Simülasyon (Büküm)"])
 
 with tab1:
     st.markdown(f"""<div class="result-card"><div class="result-value">AÇINIM: {flat:.2f} mm</div><small>Dış Toplam: {total:.1f}</small></div>""", unsafe_allow_html=True)
-    
-    # 2D Teknik Resim Grafiği (Eski usül, ölçülendirmeli)
-    sx_static, sy_static, ax_static, ay_static = generate_static_geometry(cur_l, cur_a, cur_d, th)
-    
+    sx_s, sy_s, ax_s, ay_s = generate_static_geometry(cur_l, cur_a, cur_d, th)
     fig_tech = go.Figure()
-    fig_tech.add_trace(go.Scatter(x=sx_static, y=sy_static, fill='toself', 
-                                  fillcolor='rgba(70, 130, 180, 0.4)', 
-                                  line=dict(color='#004a80', width=2), mode='lines'))
-    
-    add_smart_dims(fig_tech, ax_static, ay_static, cur_l)
-    
-    fig_tech.update_layout(height=500, plot_bgcolor="white", 
-                           yaxis=dict(scaleanchor="x", scaleratio=1, visible=False), 
-                           xaxis=dict(visible=False), margin=dict(l=20, r=20, t=20, b=20))
+    fig_tech.add_trace(go.Scatter(x=sx_s, y=sy_s, fill='toself', fillcolor='rgba(70, 130, 180, 0.4)', line=dict(color='#004a80', width=2), mode='lines'))
+    add_smart_dims(fig_tech, ax_s, ay_s, cur_l)
+    fig_tech.update_layout(height=500, plot_bgcolor="white", yaxis=dict(scaleanchor="x", scaleratio=1, visible=False), xaxis=dict(visible=False), margin=dict(l=20, r=20, t=20, b=20))
     st.plotly_chart(fig_tech, use_container_width=True)
 
 with tab2:
@@ -345,6 +318,7 @@ with tab2:
         st.warning("Lütfen büküm ekleyin.")
     else:
         c_anim, c_sel = st.columns([1, 4])
+        # Sidebar'daki sıra numaraları 1 tabanlıdır, valid_seq bunları içerir.
         steps = ["Hazırlık"] + [f"{i}. Büküm (Sıra: {x})" for i, x in enumerate(valid_seq, 1)]
         
         if "sim_step_idx" not in st.session_state: st.session_state.sim_step_idx = 0
@@ -361,7 +335,7 @@ with tab2:
         d_inf = TOOL_DB["dies"][sel_die]
         
         for fr in frames:
-            cur_idx = st.session_state.sim_step_idx
+            cur_idx = st.session_state.sim_step_idx # 0, 1, 2...
             sx, sy, act_idx = generate_geometry_at_step(cur_l, cur_a, cur_d, th, rad, valid_seq, cur_idx, fr)
             
             s_max, s_tgt = 150.0, th
@@ -373,7 +347,6 @@ with tab2:
             f_sim = go.Figure()
             f_sim.add_trace(go.Scatter(x=sx, y=sy, fill='toself', fillcolor=col_code, line=dict(color='black', width=1), opacity=0.9))
             
-            # Resimler
             p_src = process_and_crop_image(p_inf["filename"])
             if p_src: f_sim.add_layout_image(dict(source=p_src, x=0, y=c_str, sizex=p_inf["width_mm"], sizey=p_inf["height_mm"], xanchor="center", yanchor="bottom", layer="above"))
             d_src = process_and_crop_image(d_inf["filename"])
