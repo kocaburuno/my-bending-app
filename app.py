@@ -35,7 +35,6 @@ def process_and_crop_image(filename):
     if not os.path.exists(path): return None
     try:
         img = Image.open(path).convert("RGBA")
-        # Basit beyaz temizleme (Gerekirse iyileştirilebilir)
         datas = img.getdata()
         newData = []
         for item in datas:
@@ -44,10 +43,8 @@ def process_and_crop_image(filename):
             else:
                 newData.append(item)
         img.putdata(newData)
-        # Boşlukları kırp
         bbox = img.getbbox()
         if bbox: img = img.crop(bbox)
-        
         buffered = BytesIO()
         img.save(buffered, format="PNG")
         return "data:image/png;base64," + base64.b64encode(buffered.getvalue()).decode()
@@ -135,7 +132,7 @@ def add_smart_dims(fig, px, py, lengths):
         fig.add_trace(go.Scatter(x=[d1[0], d2[0]], y=[d1[1], d2[1]], mode='lines+markers', marker=dict(symbol='arrow', size=8, angleref='previous', color='black'), line=dict(color='black'), hoverinfo='skip'))
         fig.add_annotation(x=mid[0], y=mid[1], text=f"<b>{lengths[i]:.1f}</b>", showarrow=False, font=dict(color="#B22222", size=12), bgcolor="white")
 
-# --- 5.2 SİMÜLASYON MOTORU (Vektör Hizalama) ---
+# --- 5.2 SİMÜLASYON MOTORU ---
 def generate_geometry_at_step(lengths, angles, dirs, thickness, radius, seq_order, current_step_idx, progress):
     current_angles = [180.0] * len(angles)
     active_bend_idx = -1
@@ -246,10 +243,8 @@ def check_collision(x_vals, y_vals, punch_w, punch_h, die_w, die_h, current_y_st
 # --- 6. SIDEBAR ---
 with st.sidebar:
     st.header("⚙️ Ayarlar")
-    # Kalıp Seçimleri
     sel_punch = st.selectbox("Üst Bıçak", list(TOOL_DB["punches"].keys()))
     sel_die = st.selectbox("Alt Kalıp", list(TOOL_DB["dies"].keys()))
-    
     c1, c2 = st.columns(2)
     th = c1.number_input("Kalınlık (mm)", 0.1, 10.0, 2.0, 0.1)
     rad = c2.number_input("Radius", 0.1, 10.0, 1.0, 0.1)
@@ -314,10 +309,10 @@ with tab2:
     if len(cur_a) == 0:
         st.warning("Lütfen büküm ekleyin.")
     else:
-        # Dosya Kontrolü
+        # Klasör kontrolü (Debug için)
         if not os.path.exists(ASSETS_DIR):
-             st.error(f"'assets' klasörü bulunamadı: {ASSETS_DIR}")
-
+             st.error(f"Assets klasörü bulunamadı! Lütfen {ASSETS_DIR} konumunu kontrol edin.")
+             
         c_anim, c_sel = st.columns([1, 4])
         steps = ["Hazırlık"] + [f"{i}. Büküm (Sıra: {x})" for i, x in enumerate(valid_seq, 1)]
         
@@ -331,7 +326,6 @@ with tab2:
         frames = np.linspace(0, 1, 15) if st.session_state.get("sim_active", False) else [1.0]
         if st.session_state.sim_step_idx == 0: frames = [0.0]
         
-        # Seçili kalıp bilgilerini al
         p_inf = TOOL_DB["punches"][sel_punch]
         d_inf = TOOL_DB["dies"][sel_die]
         h_inf = TOOL_DB["holder"]
@@ -348,25 +342,48 @@ with tab2:
             
             f_sim = go.Figure()
             
-            # 1. Alt Kalıp (Die) - En altta
+            # --- RESİMLERİN ÇİZİLDİĞİ KISIM (DÜZELTİLDİ) ---
+            
+            # 1. Alt Kalıp (Die)
             d_src = process_and_crop_image(d_inf["filename"])
-            if d_src: f_sim.add_layout_image(dict(source=d_src, x=0, y=0, sizex=d_inf["width_mm"], sizey=d_inf["height_mm"], xanchor="center", yanchor="top", layer="below"))
+            if d_src: 
+                f_sim.add_layout_image(dict(
+                    source=d_src, 
+                    x=0, y=0, 
+                    sizex=d_inf["width_mm"], sizey=d_inf["height_mm"], 
+                    xanchor="center", yanchor="top", 
+                    layer="below",
+                    xref="x", yref="y" # <-- EKLENDİ
+                ))
 
-            # 2. Sac (Sheet Metal) - Ortada
+            # 2. Sac (Sheet Metal)
             f_sim.add_trace(go.Scatter(x=sx, y=sy, fill='toself', fillcolor=col_code, line=dict(color='black', width=1), opacity=0.9))
             
-            # 3. Üst Bıçak (Punch) - Üstte
+            # 3. Üst Bıçak (Punch)
             p_src = process_and_crop_image(p_inf["filename"])
-            if p_src: f_sim.add_layout_image(dict(source=p_src, x=0, y=c_str, sizex=p_inf["width_mm"], sizey=p_inf["height_mm"], xanchor="center", yanchor="bottom", layer="above"))
+            if p_src: 
+                f_sim.add_layout_image(dict(
+                    source=p_src, 
+                    x=0, y=c_str, 
+                    sizex=p_inf["width_mm"], sizey=p_inf["height_mm"], 
+                    xanchor="center", yanchor="bottom", 
+                    layer="above",
+                    xref="x", yref="y" # <-- EKLENDİ
+                ))
             
-            # 4. Tutucu (Holder) - Bıçağın üstünde
+            # 4. Tutucu (Holder)
             h_src = process_and_crop_image(h_inf["filename"])
             if h_src: 
-                # Tutucu bıçağın hemen üstünde durur
                 h_y_pos = c_str + p_inf["height_mm"]
-                f_sim.add_layout_image(dict(source=h_src, x=0, y=h_y_pos, sizex=h_inf["width_mm"], sizey=h_inf["height_mm"], xanchor="center", yanchor="bottom", layer="above"))
+                f_sim.add_layout_image(dict(
+                    source=h_src, 
+                    x=0, y=h_y_pos, 
+                    sizex=h_inf["width_mm"], sizey=h_inf["height_mm"], 
+                    xanchor="center", yanchor="bottom", 
+                    layer="above",
+                    xref="x", yref="y" # <-- EKLENDİ
+                ))
 
-            
             t_txt = f"Adım {cur_idx}" + (" - ⚠️ ÇARPIŞMA!" if coll else "")
             f_sim.update_layout(title=dict(text=t_txt, x=0.5, font=dict(color="red" if coll else "black")), height=600, plot_bgcolor="#f8fafc", xaxis=dict(range=[-200, 200], visible=False), yaxis=dict(range=[-150, 250], visible=False, scaleanchor="x", scaleratio=1), margin=dict(t=50, b=0, l=0, r=0), showlegend=False)
             
