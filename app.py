@@ -30,7 +30,6 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 ASSETS_DIR = os.path.join(BASE_DIR, "assets")
 
 def process_and_crop_image(filename):
-    """Resmi yükler ve boşlukları kırparak Base64 yapar."""
     path = os.path.join(ASSETS_DIR, filename)
     if not os.path.exists(path): return None
     try:
@@ -84,7 +83,6 @@ def calculate_flat_len(lengths, angles, thickness):
     return total_outer - loss, total_outer
 
 def generate_static_geometry(lengths, angles, dirs, thickness):
-    """Teknik Resim için statik geometri."""
     x_pts, y_pts = [0.0], [0.0]
     curr_ang = 0.0
     apex_x, apex_y = [0.0], [0.0]
@@ -133,17 +131,17 @@ def add_smart_dims(fig, px, py, lengths):
         fig.add_trace(go.Scatter(x=[d1[0], d2[0]], y=[d1[1], d2[1]], mode='lines+markers', marker=dict(symbol='arrow', size=8, angleref='previous', color='black'), line=dict(color='black'), hoverinfo='skip'))
         fig.add_annotation(x=mid[0], y=mid[1], text=f"<b>{lengths[i]:.1f}</b>", showarrow=False, font=dict(color="#B22222", size=12), bgcolor="white")
 
-# --- 5.2 SİMÜLASYON MOTORU (SİMETRİK BÜKÜM GÜNCELLEMESİ) ---
+# --- 5.2 SİMÜLASYON MOTORU (DÜZELTİLMİŞ VEKTÖR HİZALAMA) ---
 def generate_geometry_at_step(lengths, angles, dirs, thickness, radius, seq_order, current_step_idx, progress):
     """
-    Abkant mantığına uygun simetrik büküm (V-Bend) hesaplar.
+    Vektör tabanlı hizalama ile sıralı büküm hatası giderildi.
     """
     current_angles = [180.0] * len(angles)
     active_bend_idx = -1
     active_dir = "UP"
-    active_target_angle = 180.0 # Varsayılan düz
+    active_target_angle = 180.0
 
-    # 1. GEÇMİŞ ADIMLAR
+    # 1. GEÇMİŞ VE AKTİF AÇILARI AYARLA
     if current_step_idx > 0:
         past_steps = seq_order[:current_step_idx - 1]
         for step_num in past_steps:
@@ -151,7 +149,6 @@ def generate_geometry_at_step(lengths, angles, dirs, thickness, radius, seq_orde
             if 0 <= real_idx < len(angles):
                 current_angles[real_idx] = angles[real_idx]
 
-        # 2. AKTİF ADIM
         if (current_step_idx - 1) < len(seq_order):
             active_step_num = seq_order[current_step_idx - 1]
             active_bend_idx = active_step_num - 1
@@ -161,10 +158,10 @@ def generate_geometry_at_step(lengths, angles, dirs, thickness, radius, seq_orde
                 active_dir = dirs[active_bend_idx]
                 active_target_angle = current_angles[active_bend_idx]
 
-    # --- Geometriyi İnşa Et ---
+    # --- GEOMETRİYİ OLUŞTUR (Ham Zincir) ---
     x_pts, y_pts = [0.0], [0.0]
     curr_ang = 0.0
-    bend_coords = [] 
+    bend_coords = [] # Merkez noktaları sakla
     
     for i in range(len(lengths)):
         L = lengths[i]
@@ -175,12 +172,12 @@ def generate_geometry_at_step(lengths, angles, dirs, thickness, radius, seq_orde
         if i < len(current_angles):
             bend_coords.append((nx, ny))
             d_val = 1 if dirs[i] == "UP" else -1
-            # Geometriyi oluştururken standart lineer yöntemle devam ediyoruz
-            # Daha sonra tüm şekli döndüreceğiz.
+            # DOWN büküm için zincir hesabında yönü şimdilik standart alıyoruz,
+            # finalde tüm sacı takla attıracağız (Mirror).
             dev_deg = (180.0 - current_angles[i])
             curr_ang += np.radians(dev_deg) * d_val
 
-    # --- Kalınlık Ekle ---
+    # --- Kalınlık Ekle (Offset) ---
     outer_x, outer_y, inner_x, inner_y = [], [], [], []
     for i in range(len(x_pts)-1):
         p1 = np.array([x_pts[i], y_pts[i]])
@@ -197,67 +194,61 @@ def generate_geometry_at_step(lengths, angles, dirs, thickness, radius, seq_orde
     final_x = outer_x + inner_x[::-1] + [outer_x[0]]
     final_y = outer_y + inner_y[::-1] + [outer_y[0]]
 
-    # --- HİZALAMA VE SİMETRİK BÜKÜM DÖNDÜRMESİ ---
+    # --- HİZALAMA VE SİMETRİ (DÜZELTİLDİ) ---
     if active_bend_idx != -1:
+        # 1. Aynalama (Flip) Kontrolü
+        # Eğer büküm DOWN ise, sacı hemen Y ekseninde ters çevir.
+        # Böylece fiziksel olarak "Kuş Kanadı" hareketi yine yukarı doğru olur (simülasyon görseli için).
+        if active_dir == "DOWN":
+            final_x = [x for x in final_x] # X değişmez (veya opsiyonel)
+            final_y = [-y for y in final_y]
+            # Koordinat noktalarını da güncellememiz lazım ki vektör hesabı doğru olsun
+            y_pts = [-y for y in y_pts]
+            bend_coords = [(bx, -by) for bx, by in bend_coords]
+
+        # 2. Merkeze Taşı
         cx, cy = bend_coords[active_bend_idx]
-        p_start_x, p_start_y = x_pts[active_bend_idx], y_pts[active_bend_idx]
-        p_end_x, p_end_y = x_pts[active_bend_idx+1], y_pts[active_bend_idx+1]
-        
-        # 1. Önce aktif büküm noktasını orijine (0,0) taşı
         final_x = [x - cx for x in final_x]
         final_y = [y - cy for y in final_y]
+        
+        # 3. Vektörel Hizalama (Vector Alignment)
+        # Büküm merkezinden BİR ÖNCEKİ noktaya giden vektörü bul (Giriş Kolu)
+        # Giriş kolu: bend_coords[active_bend_idx] (ki bu x_pts[active_bend_idx+1])
+        # Bir önceki nokta: x_pts[active_bend_idx]
+        
+        # Dikkat: x_pts listesi [Başlangıç, Büküm1, Büküm2...] diye gider.
+        # active_bend_idx = 0 ise (İlk büküm): Önceki nokta x_pts[0].
+        # active_bend_idx = 1 ise (İkinci büküm): Önceki nokta x_pts[1].
+        
+        # Büküm Merkezi (Şu an 0,0'a taşıdık ama vektör hesabı için orijinal farka bakalım)
+        p_center_x, p_center_y = x_pts[active_bend_idx+1], y_pts[active_bend_idx+1]
+        p_prev_x, p_prev_y = x_pts[active_bend_idx], y_pts[active_bend_idx]
+        
+        # DOWN için flip yaptıysak bu noktaları da flip edelim
+        if active_dir == "DOWN":
+             p_center_y = -p_center_y
+             p_prev_y = -p_prev_y
 
-        # 2. Sol segmentin açısını bul (Büküm öncesi segment)
-        dx_prev = x_pts[active_bend_idx] - x_pts[active_bend_idx-1] if active_bend_idx > 0 else x_pts[active_bend_idx]
-        dy_prev = y_pts[active_bend_idx] - y_pts[active_bend_idx-1] if active_bend_idx > 0 else y_pts[active_bend_idx]
+        # Merkezden geriye giden vektör (Giriş kolunun tersi)
+        vec_x = p_prev_x - p_center_x
+        vec_y = p_prev_y - p_center_y
         
-        # Daha güvenilir yöntem: Geometri oluşturulurken açıyı takip etmek yerine
-        # Oluşmuş noktalar üzerinden vektör açısı hesaplamak.
-        # "Sol" tarafı tam yatay yapmak için gereken açıyı buluyoruz.
-        # Sol Segmentin (P_prev -> P_center) açısı
-        v_in_ang = np.arctan2(y_pts[active_bend_idx] - y_pts[active_bend_idx], x_pts[active_bend_idx] - x_pts[active_bend_idx-1]) if active_bend_idx > 0 else 0.0
+        current_angle_rad = np.arctan2(vec_y, vec_x)
         
-        # Basitlik için: Geometri üretimindeki kümülatif açıdan gidelim.
-        # active_bend_idx öncesindeki kümülatif açı, sol segmentin açısıdır.
-        # Ancak bunu tersten hesaplamak yerine, geometriyi "düzeltmek" daha kolay.
+        # 4. Hedef Açı (Target Angle)
+        # Sol kol (Giriş kolu), büküm simetrisi gereği (180 - Sapma/2) açısında durmalı.
+        # Standart trigonometride Sol taraf 180 derecedir.
+        # Bizim istediğimiz: 180 - (180 - HedefAçı)/2 = 90 + HedefAçı/2 ?
+        # Basitleştirelim: 90 derece bükümde sol kol 135 dereceye bakmalı.
+        # Formül: 180 - (180 - Angle)/2
         
-        # Şöyle yapıyoruz: Sol segmenti (active_bend_idx) yatay eksene hizala (Sıfırla).
-        # Bunun için sol segmentin açısını bulmamız lazım.
-        dx = x_pts[active_bend_idx+1] - x_pts[active_bend_idx]
-        dy = y_pts[active_bend_idx+1] - y_pts[active_bend_idx]
-        # Bu sağ segmentin açısı. Sol segmentinki ise bir önceki adımda hesaplandı.
+        dev_half_rad = np.radians(180.0 - active_target_angle) / 2.0
+        target_angle_rad = np.radians(180.0) - dev_half_rad
         
-        # ÇÖZÜM: Sol segmentin vektörünü bul ve yatay yap.
-        if active_bend_idx == 0:
-            seg_ang = 0.0 # İlk bükümse sol taraf zaten yatay başlar
-        else:
-            # Önceki noktadan merkeze gelen vektör
-            p_prev_x, p_prev_y = x_pts[active_bend_idx-1], y_pts[active_bend_idx-1]
-            seg_ang = np.arctan2(0 - 0, 0 - 0) # Bu çalışmaz, çünkü cx, cy çıkardık.
-            # Orijinal listeden:
-            dx_l = x_pts[active_bend_idx] - x_pts[active_bend_idx-1]
-            dy_l = y_pts[active_bend_idx] - y_pts[active_bend_idx-1]
-            seg_ang = np.arctan2(dy_l, dx_l)
-
-        # 3. SİMETRİ HESABI
-        # Büküm açısı: active_target_angle (Örn: 90 derece)
-        # Sapma: 180 - 90 = 90 derece.
-        # V-Kalıp Simetrisi için: Sol taraf (yataydan) sapmanın YARISI kadar yukarı kalkmalı.
-        # Sağ taraf da simetrik olarak diğer tarafa kalkmalı.
-        # Şu anki geometride Sol taraf düz (0), Sağ taraf bükük (90) duruyor (veya tersi).
-        # Tüm sistemi - (Sapma / 2) kadar döndürürsek:
-        # Sol taraf: 0 - 45 = -45 (Aşağı iner? Hayır, saat yönü tersi + dır. Aşağı inmesi için - lazım)
-        # Dikkat: Bizim Y ekseni YUKARI pozitif.
-        # Sol tarafın YUKARI kalkması için açısının artması mı azalması mı lazım?
-        # Sol segment (-1, 0) yönündedir (merkeze göre). Hayır, (+1,0) yönünde çizdik.
-        # En iyisi: Sol segmenti YATAY (0 derece) hizala. Sonra (180-Açı)/2 kadar SAAT YÖNÜNDE (Negatif) çevir.
+        # 5. Döndürme Farkı
+        rotation_needed = target_angle_rad - current_angle_rad
         
-        correction_angle = -seg_ang # Önce düzle
-        v_symmetry_offset = -np.radians((180.0 - active_target_angle) / 2.0)
-        
-        total_rot = correction_angle + v_symmetry_offset
-        
-        cos_a, sin_a = np.cos(total_rot), np.sin(total_rot)
+        cos_a, sin_a = np.cos(rotation_needed), np.sin(rotation_needed)
         rx, ry = [], []
         for i in range(len(final_x)):
             nx_val = final_x[i] * cos_a - final_y[i] * sin_a
@@ -266,11 +257,9 @@ def generate_geometry_at_step(lengths, angles, dirs, thickness, radius, seq_orde
             ry.append(ny_val)
         final_x, final_y = rx, ry
         
-        # Z-FLIP (Aynalama) - DOWN büküm için
+        # Kalınlık Düzeltmesi (DOWN ise tekrar yukarı al, çünkü kalıp 0 noktasında)
         if active_dir == "DOWN":
-            final_x = [-x for x in final_x] # X Mirror
-            final_y = [-y for y in final_y] # Y Mirror
-            final_y = [y + thickness for y in final_y] # Kalınlık düzeltmesi
+             final_y = [y + thickness for y in final_y]
             
     return final_x, final_y, active_bend_idx
 
