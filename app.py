@@ -30,10 +30,12 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 ASSETS_DIR = os.path.join(BASE_DIR, "assets")
 
 def process_and_crop_image(filename):
+    """Resmi yükler, beyaz arka planı temizler ve Base64 yapar."""
     path = os.path.join(ASSETS_DIR, filename)
     if not os.path.exists(path): return None
     try:
         img = Image.open(path).convert("RGBA")
+        # Basit beyaz temizleme (Gerekirse iyileştirilebilir)
         datas = img.getdata()
         newData = []
         for item in datas:
@@ -42,8 +44,10 @@ def process_and_crop_image(filename):
             else:
                 newData.append(item)
         img.putdata(newData)
+        # Boşlukları kırp
         bbox = img.getbbox()
         if bbox: img = img.crop(bbox)
+        
         buffered = BytesIO()
         img.save(buffered, format="PNG")
         return "data:image/png;base64," + base64.b64encode(buffered.getvalue()).decode()
@@ -131,17 +135,13 @@ def add_smart_dims(fig, px, py, lengths):
         fig.add_trace(go.Scatter(x=[d1[0], d2[0]], y=[d1[1], d2[1]], mode='lines+markers', marker=dict(symbol='arrow', size=8, angleref='previous', color='black'), line=dict(color='black'), hoverinfo='skip'))
         fig.add_annotation(x=mid[0], y=mid[1], text=f"<b>{lengths[i]:.1f}</b>", showarrow=False, font=dict(color="#B22222", size=12), bgcolor="white")
 
-# --- 5.2 SİMÜLASYON MOTORU (DÜZELTİLMİŞ VEKTÖR HİZALAMA) ---
+# --- 5.2 SİMÜLASYON MOTORU (Vektör Hizalama) ---
 def generate_geometry_at_step(lengths, angles, dirs, thickness, radius, seq_order, current_step_idx, progress):
-    """
-    Vektör tabanlı hizalama ile sıralı büküm hatası giderildi.
-    """
     current_angles = [180.0] * len(angles)
     active_bend_idx = -1
     active_dir = "UP"
     active_target_angle = 180.0
 
-    # 1. GEÇMİŞ VE AKTİF AÇILARI AYARLA
     if current_step_idx > 0:
         past_steps = seq_order[:current_step_idx - 1]
         for step_num in past_steps:
@@ -158,10 +158,9 @@ def generate_geometry_at_step(lengths, angles, dirs, thickness, radius, seq_orde
                 active_dir = dirs[active_bend_idx]
                 active_target_angle = current_angles[active_bend_idx]
 
-    # --- GEOMETRİYİ OLUŞTUR (Ham Zincir) ---
     x_pts, y_pts = [0.0], [0.0]
     curr_ang = 0.0
-    bend_coords = [] # Merkez noktaları sakla
+    bend_coords = []
     
     for i in range(len(lengths)):
         L = lengths[i]
@@ -172,12 +171,9 @@ def generate_geometry_at_step(lengths, angles, dirs, thickness, radius, seq_orde
         if i < len(current_angles):
             bend_coords.append((nx, ny))
             d_val = 1 if dirs[i] == "UP" else -1
-            # DOWN büküm için zincir hesabında yönü şimdilik standart alıyoruz,
-            # finalde tüm sacı takla attıracağız (Mirror).
             dev_deg = (180.0 - current_angles[i])
             curr_ang += np.radians(dev_deg) * d_val
 
-    # --- Kalınlık Ekle (Offset) ---
     outer_x, outer_y, inner_x, inner_y = [], [], [], []
     for i in range(len(x_pts)-1):
         p1 = np.array([x_pts[i], y_pts[i]])
@@ -194,58 +190,30 @@ def generate_geometry_at_step(lengths, angles, dirs, thickness, radius, seq_orde
     final_x = outer_x + inner_x[::-1] + [outer_x[0]]
     final_y = outer_y + inner_y[::-1] + [outer_y[0]]
 
-    # --- HİZALAMA VE SİMETRİ (DÜZELTİLDİ) ---
     if active_bend_idx != -1:
-        # 1. Aynalama (Flip) Kontrolü
-        # Eğer büküm DOWN ise, sacı hemen Y ekseninde ters çevir.
-        # Böylece fiziksel olarak "Kuş Kanadı" hareketi yine yukarı doğru olur (simülasyon görseli için).
         if active_dir == "DOWN":
-            final_x = [x for x in final_x] # X değişmez (veya opsiyonel)
+            final_x = [x for x in final_x]
             final_y = [-y for y in final_y]
-            # Koordinat noktalarını da güncellememiz lazım ki vektör hesabı doğru olsun
             y_pts = [-y for y in y_pts]
             bend_coords = [(bx, -by) for bx, by in bend_coords]
 
-        # 2. Merkeze Taşı
         cx, cy = bend_coords[active_bend_idx]
         final_x = [x - cx for x in final_x]
         final_y = [y - cy for y in final_y]
         
-        # 3. Vektörel Hizalama (Vector Alignment)
-        # Büküm merkezinden BİR ÖNCEKİ noktaya giden vektörü bul (Giriş Kolu)
-        # Giriş kolu: bend_coords[active_bend_idx] (ki bu x_pts[active_bend_idx+1])
-        # Bir önceki nokta: x_pts[active_bend_idx]
-        
-        # Dikkat: x_pts listesi [Başlangıç, Büküm1, Büküm2...] diye gider.
-        # active_bend_idx = 0 ise (İlk büküm): Önceki nokta x_pts[0].
-        # active_bend_idx = 1 ise (İkinci büküm): Önceki nokta x_pts[1].
-        
-        # Büküm Merkezi (Şu an 0,0'a taşıdık ama vektör hesabı için orijinal farka bakalım)
         p_center_x, p_center_y = x_pts[active_bend_idx+1], y_pts[active_bend_idx+1]
         p_prev_x, p_prev_y = x_pts[active_bend_idx], y_pts[active_bend_idx]
         
-        # DOWN için flip yaptıysak bu noktaları da flip edelim
         if active_dir == "DOWN":
              p_center_y = -p_center_y
              p_prev_y = -p_prev_y
 
-        # Merkezden geriye giden vektör (Giriş kolunun tersi)
         vec_x = p_prev_x - p_center_x
         vec_y = p_prev_y - p_center_y
-        
         current_angle_rad = np.arctan2(vec_y, vec_x)
-        
-        # 4. Hedef Açı (Target Angle)
-        # Sol kol (Giriş kolu), büküm simetrisi gereği (180 - Sapma/2) açısında durmalı.
-        # Standart trigonometride Sol taraf 180 derecedir.
-        # Bizim istediğimiz: 180 - (180 - HedefAçı)/2 = 90 + HedefAçı/2 ?
-        # Basitleştirelim: 90 derece bükümde sol kol 135 dereceye bakmalı.
-        # Formül: 180 - (180 - Angle)/2
         
         dev_half_rad = np.radians(180.0 - active_target_angle) / 2.0
         target_angle_rad = np.radians(180.0) - dev_half_rad
-        
-        # 5. Döndürme Farkı
         rotation_needed = target_angle_rad - current_angle_rad
         
         cos_a, sin_a = np.cos(rotation_needed), np.sin(rotation_needed)
@@ -257,7 +225,6 @@ def generate_geometry_at_step(lengths, angles, dirs, thickness, radius, seq_orde
             ry.append(ny_val)
         final_x, final_y = rx, ry
         
-        # Kalınlık Düzeltmesi (DOWN ise tekrar yukarı al, çünkü kalıp 0 noktasında)
         if active_dir == "DOWN":
              final_y = [y + thickness for y in final_y]
             
@@ -279,8 +246,10 @@ def check_collision(x_vals, y_vals, punch_w, punch_h, die_w, die_h, current_y_st
 # --- 6. SIDEBAR ---
 with st.sidebar:
     st.header("⚙️ Ayarlar")
+    # Kalıp Seçimleri
     sel_punch = st.selectbox("Üst Bıçak", list(TOOL_DB["punches"].keys()))
     sel_die = st.selectbox("Alt Kalıp", list(TOOL_DB["dies"].keys()))
+    
     c1, c2 = st.columns(2)
     th = c1.number_input("Kalınlık (mm)", 0.1, 10.0, 2.0, 0.1)
     rad = c2.number_input("Radius", 0.1, 10.0, 1.0, 0.1)
@@ -345,6 +314,10 @@ with tab2:
     if len(cur_a) == 0:
         st.warning("Lütfen büküm ekleyin.")
     else:
+        # Dosya Kontrolü
+        if not os.path.exists(ASSETS_DIR):
+             st.error(f"'assets' klasörü bulunamadı: {ASSETS_DIR}")
+
         c_anim, c_sel = st.columns([1, 4])
         steps = ["Hazırlık"] + [f"{i}. Büküm (Sıra: {x})" for i, x in enumerate(valid_seq, 1)]
         
@@ -358,8 +331,10 @@ with tab2:
         frames = np.linspace(0, 1, 15) if st.session_state.get("sim_active", False) else [1.0]
         if st.session_state.sim_step_idx == 0: frames = [0.0]
         
+        # Seçili kalıp bilgilerini al
         p_inf = TOOL_DB["punches"][sel_punch]
         d_inf = TOOL_DB["dies"][sel_die]
+        h_inf = TOOL_DB["holder"]
         
         for fr in frames:
             cur_idx = st.session_state.sim_step_idx 
@@ -372,12 +347,25 @@ with tab2:
             col_code = "#dc2626" if coll else "#4682b4"
             
             f_sim = go.Figure()
-            f_sim.add_trace(go.Scatter(x=sx, y=sy, fill='toself', fillcolor=col_code, line=dict(color='black', width=1), opacity=0.9))
             
-            p_src = process_and_crop_image(p_inf["filename"])
-            if p_src: f_sim.add_layout_image(dict(source=p_src, x=0, y=c_str, sizex=p_inf["width_mm"], sizey=p_inf["height_mm"], xanchor="center", yanchor="bottom", layer="above"))
+            # 1. Alt Kalıp (Die) - En altta
             d_src = process_and_crop_image(d_inf["filename"])
             if d_src: f_sim.add_layout_image(dict(source=d_src, x=0, y=0, sizex=d_inf["width_mm"], sizey=d_inf["height_mm"], xanchor="center", yanchor="top", layer="below"))
+
+            # 2. Sac (Sheet Metal) - Ortada
+            f_sim.add_trace(go.Scatter(x=sx, y=sy, fill='toself', fillcolor=col_code, line=dict(color='black', width=1), opacity=0.9))
+            
+            # 3. Üst Bıçak (Punch) - Üstte
+            p_src = process_and_crop_image(p_inf["filename"])
+            if p_src: f_sim.add_layout_image(dict(source=p_src, x=0, y=c_str, sizex=p_inf["width_mm"], sizey=p_inf["height_mm"], xanchor="center", yanchor="bottom", layer="above"))
+            
+            # 4. Tutucu (Holder) - Bıçağın üstünde
+            h_src = process_and_crop_image(h_inf["filename"])
+            if h_src: 
+                # Tutucu bıçağın hemen üstünde durur
+                h_y_pos = c_str + p_inf["height_mm"]
+                f_sim.add_layout_image(dict(source=h_src, x=0, y=h_y_pos, sizex=h_inf["width_mm"], sizey=h_inf["height_mm"], xanchor="center", yanchor="bottom", layer="above"))
+
             
             t_txt = f"Adım {cur_idx}" + (" - ⚠️ ÇARPIŞMA!" if coll else "")
             f_sim.update_layout(title=dict(text=t_txt, x=0.5, font=dict(color="red" if coll else "black")), height=600, plot_bgcolor="#f8fafc", xaxis=dict(range=[-200, 200], visible=False), yaxis=dict(range=[-150, 250], visible=False, scaleanchor="x", scaleratio=1), margin=dict(t=50, b=0, l=0, r=0), showlegend=False)
