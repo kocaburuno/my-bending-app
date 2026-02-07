@@ -97,12 +97,10 @@ def generate_static_geometry(lengths, angles, dirs, thickness):
         
         if i < len(angles):
             u_ang = angles[i]
-            # UP = Pozitif (+), DOWN = Negatif (-) Açı
             d_val = 1 if dirs[i] == "UP" else -1 
             dev_deg = (180.0 - u_ang)
             curr_ang += np.radians(dev_deg) * d_val
 
-    # Kalınlık Ofseti
     outer_x, outer_y, inner_x, inner_y = [], [], [], []
     for i in range(len(x_pts)-1):
         p1 = np.array([x_pts[i], y_pts[i]])
@@ -134,18 +132,18 @@ def add_smart_dims(fig, px, py, lengths):
         fig.add_trace(go.Scatter(x=[d1[0], d2[0]], y=[d1[1], d2[1]], mode='lines+markers', marker=dict(symbol='arrow', size=8, angleref='previous', color='black'), line=dict(color='black'), hoverinfo='skip'))
         fig.add_annotation(x=mid[0], y=mid[1], text=f"<b>{lengths[i]:.1f}</b>", showarrow=False, font=dict(color="#B22222", size=12), bgcolor="white")
 
-# --- 5.2 SİMÜLASYON MOTORU (GEOMETRİK AKIL) ---
+# --- 5.2 SİMÜLASYON MOTORU (ÇİFT EKSEN FLIP / ROTASYON) ---
 def generate_geometry_at_step(lengths, angles, dirs, thickness, radius, seq_order, current_step_idx, progress):
     """
-    Geometri Tabanlı Aynalama:
-    - DOWN/UP etiketine değil, oluşan şeklin "V-Kalıba" uygunluğuna bakar.
-    - Eğer aktif büküm "Ters V" (Mountain) ise, parçayı otomatik çevirir.
+    Revize: DOWN (Aşağı) bükümde hem X hem Y ekseninde aynalama (Full Rotation).
+    Bu sayede Z-Büküm geometrisi doğru oryantasyonla kalıba oturur.
     """
     
     current_angles = [180.0] * len(angles)
     active_bend_idx = -1
     active_target_angle = 180.0
-
+    
+    # Adım ve Açı Belirleme
     if current_step_idx > 0:
         past_steps = seq_order[:current_step_idx - 1]
         for step_num in past_steps:
@@ -161,12 +159,11 @@ def generate_geometry_at_step(lengths, angles, dirs, thickness, radius, seq_orde
                 current_angles[active_bend_idx] = 180.0 - (180.0 - target) * progress
                 active_target_angle = current_angles[active_bend_idx]
 
-    # 1. HAM ŞEKLİ OLUŞTUR (Yönler Dahil)
+    # 1. HAM ŞEKİL OLUŞTURMA (Her zaman UP referanslı)
     x_pts, y_pts = [0.0], [0.0]
     curr_ang = 0.0
     bend_coords = []
     
-    # Burada Dirs (UP/DOWN) shape'i oluşturur (Z veya U formu)
     for i in range(len(lengths)):
         L = lengths[i]
         nx = x_pts[-1] + L * np.cos(curr_ang)
@@ -175,12 +172,12 @@ def generate_geometry_at_step(lengths, angles, dirs, thickness, radius, seq_orde
         
         if i < len(current_angles):
             bend_coords.append((nx, ny))
-            # UP = +, DOWN = -
-            d_val = 1 if dirs[i] == "UP" else -1
+            # d_val = 1 sabit, çünkü şekli oluşturup sonra komple çevireceğiz
+            d_val = 1 
             dev_deg = (180.0 - current_angles[i])
             curr_ang += np.radians(dev_deg) * d_val
 
-    # 2. KALINLIK EKLE
+    # 2. KALINLIK EKLEME
     outer_x, outer_y, inner_x, inner_y = [], [], [], []
     for i in range(len(x_pts)-1):
         p1 = np.array([x_pts[i], y_pts[i]])
@@ -197,44 +194,40 @@ def generate_geometry_at_step(lengths, angles, dirs, thickness, radius, seq_orde
     final_x = outer_x + inner_x[::-1] + [outer_x[0]]
     final_y = outer_y + inner_y[::-1] + [outer_y[0]]
 
-    # 3. KONUMLANDIRMA VE GEOMETRİK FLIP
+    # 3. KONUMLANDIRMA ve ÇİFT EKSEN FLIP
     if active_bend_idx != -1:
-        
-        # A) GEOMETRİ KONTROLÜ (Mountain vs Valley)
-        # Aktif bükümün "içbükey" mi "dışbükey" mi olduğuna bakalım.
-        # UP (+ Açı) genellikle Valley (V) üretir (CCW dönüşte).
-        # DOWN (- Açı) genellikle Mountain (Ters V) üretir.
-        
         active_dir = dirs[active_bend_idx]
         
-        # Eğer büküm DOWN ise (veya shape ters ise), parçayı komple çevir (Flip)
-        # Böylece "Ters V" olan kısım, "Düz V" olur ve kalıba oturur.
-        needs_flip = (active_dir == "DOWN")
-        
-        if needs_flip:
+        # DOWN ise hem Y hem X ekseninde ters çevir
+        if active_dir == "DOWN":
+            # Y Aynalama (Upside Down)
             final_y = [-y for y in final_y]
             y_pts = [-y for y in y_pts]
-            bend_coords = [(bx, -by) for bx, by in bend_coords]
+            
+            # X Aynalama (Left-Right Mirror) - İSTEĞİNİZ ÜZERİNE EKLENDİ
+            final_x = [-x for x in final_x]
+            x_pts = [-x for x in x_pts]
+            
+            # Merkez Noktaları da çevir
+            bend_coords = [(-bx, -by) for bx, by in bend_coords]
 
-        # B) MERKEZE TAŞIMA
+        # Merkeze Taşı
         cx, cy = bend_coords[active_bend_idx]
         final_x = [x - cx for x in final_x]
         final_y = [y - cy for y in final_y]
         
-        # C) SİMETRİK KALKIŞ (V-Bend Hizalama)
-        # Büküm merkezinden bir önceki noktaya giden vektör
+        # Vektör Hizalama (Simetrik Kalkış)
         p_center_x, p_center_y = x_pts[active_bend_idx+1], y_pts[active_bend_idx+1]
         p_prev_x, p_prev_y = x_pts[active_bend_idx], y_pts[active_bend_idx]
         
-        if needs_flip:
-             p_center_y = -p_center_y
-             p_prev_y = -p_prev_y
+        # DOWN durumunda noktaları yukarıda zaten çevirdiğimiz için 
+        # x_pts ve y_pts güncel haldedir, tekrar işlem yapmaya gerek yok.
 
         vec_x = p_prev_x - p_center_x
         vec_y = p_prev_y - p_center_y
         current_angle_rad = np.arctan2(vec_y, vec_x)
         
-        # Hedef: Sol kol (180 - Hedef)/2 açısına bakmalı
+        # Hedef Açı Hizalaması
         dev_half_rad = np.radians(180.0 - active_target_angle) / 2.0
         target_angle_rad = np.radians(180.0) - dev_half_rad
         
@@ -248,9 +241,6 @@ def generate_geometry_at_step(lengths, angles, dirs, thickness, radius, seq_orde
             rx.append(nx_val)
             ry.append(ny_val)
         final_x, final_y = rx, ry
-        
-        # Flip durumunda sacın kalıbın üzerine oturması için kalınlık ayarı gerekebilir
-        # Ancak merkez offset mantığı bunu genelde çözer.
             
     return final_x, final_y, active_bend_idx
 
