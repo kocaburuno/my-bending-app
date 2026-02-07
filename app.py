@@ -37,7 +37,7 @@ def process_and_crop_image(filename):
         img = Image.open(path).convert("RGBA")
         datas = img.getdata()
         newData = []
-        # Basit beyaz temizleme toleransı
+        # Basit beyaz temizleme
         for item in datas:
             if item[0] > 240 and item[1] > 240 and item[2] > 240:
                 newData.append((255, 255, 255, 0))
@@ -100,12 +100,11 @@ def generate_static_geometry(lengths, angles, dirs, thickness):
         
         if i < len(angles):
             u_ang = angles[i]
-            # Teknik resimde sadece şekli gösteriyoruz, flip önemli değil
+            # Teknik resimde sadece şekli gösteriyoruz
             d_val = 1 if dirs[i] == "UP" else -1 
             dev_deg = (180.0 - u_ang)
             curr_ang += np.radians(dev_deg) * d_val
 
-    # Kalınlık Ofseti
     outer_x, outer_y, inner_x, inner_y = [], [], [], []
     for i in range(len(x_pts)-1):
         p1 = np.array([x_pts[i], y_pts[i]])
@@ -137,7 +136,7 @@ def add_smart_dims(fig, px, py, lengths):
         fig.add_trace(go.Scatter(x=[d1[0], d2[0]], y=[d1[1], d2[1]], mode='lines+markers', marker=dict(symbol='arrow', size=8, angleref='previous', color='black'), line=dict(color='black'), hoverinfo='skip'))
         fig.add_annotation(x=mid[0], y=mid[1], text=f"<b>{lengths[i]:.1f}</b>", showarrow=False, font=dict(color="#B22222", size=12), bgcolor="white")
 
-# --- 5.2 SİMÜLASYON MOTORU (DÜZELTİLMİŞ FİZİK) ---
+# --- 5.2 SİMÜLASYON MOTORU (DÜZELTİLMİŞ FİZİK - HER ZAMAN UP BÜKÜM) ---
 def generate_geometry_at_step(lengths, angles, dirs, thickness, radius, seq_order, current_step_idx, progress):
     """
     Abkant fizik motoru:
@@ -170,6 +169,7 @@ def generate_geometry_at_step(lengths, angles, dirs, thickness, radius, seq_orde
                 active_target_angle = current_angles[active_bend_idx]
 
     # 2. HAM GEOMETRİYİ OLUŞTUR
+    # Sacın şeklini oluşturuyoruz (Henüz uzayda konumlandırılmamış hali)
     x_pts, y_pts = [0.0], [0.0]
     curr_ang = 0.0
     bend_coords = []
@@ -182,8 +182,9 @@ def generate_geometry_at_step(lengths, angles, dirs, thickness, radius, seq_orde
         
         if i < len(current_angles):
             bend_coords.append((nx, ny))
-            # Büküm yönü fiziksel değil, şekilseldir. 
-            # UP formunu koruyoruz, DOWN ise tüm şekli sonra flip edeceğiz.
+            # ÖNEMLİ: Sacın formunu oluştururken her zaman standart (UP) gibi zincir kuruyoruz.
+            # Eğer DOWN seçildiyse, şekil aynıdır ama tüm parça uzayda terstir.
+            # O yüzden burada d_val = 1 sabit tutuyoruz.
             d_val = 1 
             dev_deg = (180.0 - current_angles[i])
             curr_ang += np.radians(dev_deg) * d_val
@@ -209,21 +210,25 @@ def generate_geometry_at_step(lengths, angles, dirs, thickness, radius, seq_orde
     if active_bend_idx != -1:
         
         # A) FLIP (Aynalama)
-        # Eğer büküm DOWN ise, sacı Y ekseninde ters çevir.
+        # Eğer büküm DOWN ise, operatör sacı ters çevirmiştir.
+        # Mevcut koordinatları Y ekseninde aynalıyoruz.
         if active_dir == "DOWN":
             final_y = [-y for y in final_y]
             y_pts = [-y for y in y_pts]
             bend_coords = [(bx, -by) for bx, by in bend_coords]
 
         # B) MERKEZE TAŞIMA
+        # Aktif büküm noktasını (0,0) noktasına alıyoruz
         cx, cy = bend_coords[active_bend_idx]
         final_x = [x - cx for x in final_x]
         final_y = [y - cy for y in final_y]
         
         # C) VEKTÖR HİZALAMA
+        # Büküm merkezinden BİR ÖNCEKİ noktaya giden vektörü buluyoruz (Giriş Kolu)
         p_center_x, p_center_y = x_pts[active_bend_idx+1], y_pts[active_bend_idx+1]
         p_prev_x, p_prev_y = x_pts[active_bend_idx], y_pts[active_bend_idx]
         
+        # Eğer Flip yaptıysak referans noktalarını da flip ediyoruz
         if active_dir == "DOWN":
              p_center_y = -p_center_y
              p_prev_y = -p_prev_y
@@ -232,7 +237,8 @@ def generate_geometry_at_step(lengths, angles, dirs, thickness, radius, seq_orde
         vec_y = p_prev_y - p_center_y
         current_angle_rad = np.arctan2(vec_y, vec_x)
         
-        # Simetrik V-Büküm: Sol kol (180 - Hedef)/2 açısına bakmalı
+        # HEDEF AÇI: Simetrik V-Büküm
+        # Sacın giriş kolu (sol taraf), hedef açının yarısı kadar yukarı bakmalı.
         dev_half_rad = np.radians(180.0 - active_target_angle) / 2.0
         target_angle_rad = np.radians(180.0) - dev_half_rad
         
