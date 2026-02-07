@@ -37,7 +37,6 @@ def process_and_crop_image(filename):
         img = Image.open(path).convert("RGBA")
         datas = img.getdata()
         newData = []
-        # Basit beyaz temizleme toleransı
         for item in datas:
             if item[0] > 240 and item[1] > 240 and item[2] > 240:
                 newData.append((255, 255, 255, 0))
@@ -75,7 +74,6 @@ if "sequence" not in st.session_state:
     st.session_state.sequence = "1, 2"
 
 # --- 5. HESAPLAMA MOTORLARI ---
-
 def calculate_flat_len(lengths, angles, thickness):
     total_outer = sum(lengths)
     loss = 0.0
@@ -86,7 +84,6 @@ def calculate_flat_len(lengths, angles, thickness):
     return total_outer - loss, total_outer
 
 def generate_static_geometry(lengths, angles, dirs, thickness):
-    """Teknik Resim (2D) için basit zincirleme geometri."""
     x_pts, y_pts = [0.0], [0.0]
     curr_ang = 0.0
     apex_x, apex_y = [0.0], [0.0]
@@ -100,11 +97,12 @@ def generate_static_geometry(lengths, angles, dirs, thickness):
         
         if i < len(angles):
             u_ang = angles[i]
-            # Teknik resimde sadece şekli gösteriyoruz
+            # UP = Pozitif (+), DOWN = Negatif (-) Açı
             d_val = 1 if dirs[i] == "UP" else -1 
             dev_deg = (180.0 - u_ang)
             curr_ang += np.radians(dev_deg) * d_val
 
+    # Kalınlık Ofseti
     outer_x, outer_y, inner_x, inner_y = [], [], [], []
     for i in range(len(x_pts)-1):
         p1 = np.array([x_pts[i], y_pts[i]])
@@ -136,17 +134,16 @@ def add_smart_dims(fig, px, py, lengths):
         fig.add_trace(go.Scatter(x=[d1[0], d2[0]], y=[d1[1], d2[1]], mode='lines+markers', marker=dict(symbol='arrow', size=8, angleref='previous', color='black'), line=dict(color='black'), hoverinfo='skip'))
         fig.add_annotation(x=mid[0], y=mid[1], text=f"<b>{lengths[i]:.1f}</b>", showarrow=False, font=dict(color="#B22222", size=12), bgcolor="white")
 
-# --- 5.2 SİMÜLASYON MOTORU (DÜZELTİLMİŞ FİZİK - FLIP + BEND UP) ---
+# --- 5.2 SİMÜLASYON MOTORU (GEOMETRİK AKIL) ---
 def generate_geometry_at_step(lengths, angles, dirs, thickness, radius, seq_order, current_step_idx, progress):
     """
-    DÜZELTME: 
-    - "DOWN" yönü seçildiğinde sac Y ekseninde aynalanır (Flip).
-    - Büküm hareketi daima V-Kalıbın dışına (YUKARI) doğru yapılır.
+    Geometri Tabanlı Aynalama:
+    - DOWN/UP etiketine değil, oluşan şeklin "V-Kalıba" uygunluğuna bakar.
+    - Eğer aktif büküm "Ters V" (Mountain) ise, parçayı otomatik çevirir.
     """
     
     current_angles = [180.0] * len(angles)
     active_bend_idx = -1
-    active_dir = "UP"
     active_target_angle = 180.0
 
     if current_step_idx > 0:
@@ -162,14 +159,14 @@ def generate_geometry_at_step(lengths, angles, dirs, thickness, radius, seq_orde
             if 0 <= active_bend_idx < len(angles):
                 target = angles[active_bend_idx]
                 current_angles[active_bend_idx] = 180.0 - (180.0 - target) * progress
-                active_dir = dirs[active_bend_idx]
                 active_target_angle = current_angles[active_bend_idx]
 
-    # HAM GEOMETRİ (Her zaman UP formunda oluştur, sonra çevireceğiz)
+    # 1. HAM ŞEKLİ OLUŞTUR (Yönler Dahil)
     x_pts, y_pts = [0.0], [0.0]
     curr_ang = 0.0
     bend_coords = []
     
+    # Burada Dirs (UP/DOWN) shape'i oluşturur (Z veya U formu)
     for i in range(len(lengths)):
         L = lengths[i]
         nx = x_pts[-1] + L * np.cos(curr_ang)
@@ -178,13 +175,12 @@ def generate_geometry_at_step(lengths, angles, dirs, thickness, radius, seq_orde
         
         if i < len(current_angles):
             bend_coords.append((nx, ny))
-            # Burada d_val'ı her zaman 1 alıyoruz.
-            # Yönü (UP/DOWN) shape'i oluşturduktan sonra tüm koordinatları aynalayarak vereceğiz.
-            d_val = 1 
+            # UP = +, DOWN = -
+            d_val = 1 if dirs[i] == "UP" else -1
             dev_deg = (180.0 - current_angles[i])
             curr_ang += np.radians(dev_deg) * d_val
 
-    # KALINLIK EKLE
+    # 2. KALINLIK EKLE
     outer_x, outer_y, inner_x, inner_y = [], [], [], []
     for i in range(len(x_pts)-1):
         p1 = np.array([x_pts[i], y_pts[i]])
@@ -201,35 +197,44 @@ def generate_geometry_at_step(lengths, angles, dirs, thickness, radius, seq_orde
     final_x = outer_x + inner_x[::-1] + [outer_x[0]]
     final_y = outer_y + inner_y[::-1] + [outer_y[0]]
 
-    # KONUMLANDIRMA
+    # 3. KONUMLANDIRMA VE GEOMETRİK FLIP
     if active_bend_idx != -1:
         
-        # 1. FLIP (AYNALAMA) İŞLEMİ
-        # Eğer operasyon "DOWN" ise sacı ters çevir.
-        if active_dir == "DOWN":
+        # A) GEOMETRİ KONTROLÜ (Mountain vs Valley)
+        # Aktif bükümün "içbükey" mi "dışbükey" mi olduğuna bakalım.
+        # UP (+ Açı) genellikle Valley (V) üretir (CCW dönüşte).
+        # DOWN (- Açı) genellikle Mountain (Ters V) üretir.
+        
+        active_dir = dirs[active_bend_idx]
+        
+        # Eğer büküm DOWN ise (veya shape ters ise), parçayı komple çevir (Flip)
+        # Böylece "Ters V" olan kısım, "Düz V" olur ve kalıba oturur.
+        needs_flip = (active_dir == "DOWN")
+        
+        if needs_flip:
             final_y = [-y for y in final_y]
-            # Referans noktalarını da güncelle
             y_pts = [-y for y in y_pts]
             bend_coords = [(bx, -by) for bx, by in bend_coords]
 
-        # 2. MERKEZE TAŞIMA
+        # B) MERKEZE TAŞIMA
         cx, cy = bend_coords[active_bend_idx]
         final_x = [x - cx for x in final_x]
         final_y = [y - cy for y in final_y]
         
-        # 3. VEKTÖR HİZALAMA (SİMETRİK KALKIŞ)
+        # C) SİMETRİK KALKIŞ (V-Bend Hizalama)
+        # Büküm merkezinden bir önceki noktaya giden vektör
         p_center_x, p_center_y = x_pts[active_bend_idx+1], y_pts[active_bend_idx+1]
         p_prev_x, p_prev_y = x_pts[active_bend_idx], y_pts[active_bend_idx]
         
-        # Eğer Flip olduysa noktalar değişti, tekrar güncellemeye gerek yok çünkü
-        # yukarıda y_pts listesini zaten güncelledik.
+        if needs_flip:
+             p_center_y = -p_center_y
+             p_prev_y = -p_prev_y
 
         vec_x = p_prev_x - p_center_x
         vec_y = p_prev_y - p_center_y
         current_angle_rad = np.arctan2(vec_y, vec_x)
         
-        # HEDEF: Sol kol (180 - HedefAçı)/2 açısına bakmalı (Pozitif Y yönünde)
-        # Örnek: 90 derece büküm -> (180-90)/2 = 45 derece kalkmalı.
+        # Hedef: Sol kol (180 - Hedef)/2 açısına bakmalı
         dev_half_rad = np.radians(180.0 - active_target_angle) / 2.0
         target_angle_rad = np.radians(180.0) - dev_half_rad
         
@@ -243,6 +248,9 @@ def generate_geometry_at_step(lengths, angles, dirs, thickness, radius, seq_orde
             rx.append(nx_val)
             ry.append(ny_val)
         final_x, final_y = rx, ry
+        
+        # Flip durumunda sacın kalıbın üzerine oturması için kalınlık ayarı gerekebilir
+        # Ancak merkez offset mantığı bunu genelde çözer.
             
     return final_x, final_y, active_bend_idx
 
@@ -328,7 +336,6 @@ with tab2:
     if len(cur_a) == 0:
         st.warning("Lütfen büküm ekleyin.")
     else:
-        # Asset Kontrolü
         if not os.path.exists(ASSETS_DIR):
              st.error(f"Assets klasörü bulunamadı: {ASSETS_DIR}")
 
@@ -361,37 +368,18 @@ with tab2:
             
             f_sim = go.Figure()
             
-            # KATMANLAR (Layers)
-            # 1. Alt Kalıp (Die)
             d_src = process_and_crop_image(d_inf["filename"])
-            if d_src: 
-                f_sim.add_layout_image(dict(
-                    source=d_src, x=0, y=0, 
-                    sizex=d_inf["width_mm"], sizey=d_inf["height_mm"], 
-                    xanchor="center", yanchor="top", layer="below", xref="x", yref="y"
-                ))
+            if d_src: f_sim.add_layout_image(dict(source=d_src, x=0, y=0, sizex=d_inf["width_mm"], sizey=d_inf["height_mm"], xanchor="center", yanchor="top", layer="below", xref="x", yref="y"))
 
-            # 2. Sac (Sheet)
             f_sim.add_trace(go.Scatter(x=sx, y=sy, fill='toself', fillcolor=col_code, line=dict(color='black', width=1), opacity=0.9))
             
-            # 3. Üst Bıçak (Punch)
             p_src = process_and_crop_image(p_inf["filename"])
-            if p_src: 
-                f_sim.add_layout_image(dict(
-                    source=p_src, x=0, y=c_str, 
-                    sizex=p_inf["width_mm"], sizey=p_inf["height_mm"], 
-                    xanchor="center", yanchor="bottom", layer="above", xref="x", yref="y"
-                ))
+            if p_src: f_sim.add_layout_image(dict(source=p_src, x=0, y=c_str, sizex=p_inf["width_mm"], sizey=p_inf["height_mm"], xanchor="center", yanchor="bottom", layer="above", xref="x", yref="y"))
             
-            # 4. Tutucu (Holder)
             h_src = process_and_crop_image(h_inf["filename"])
             if h_src: 
                 h_y_pos = c_str + p_inf["height_mm"]
-                f_sim.add_layout_image(dict(
-                    source=h_src, x=0, y=h_y_pos, 
-                    sizex=h_inf["width_mm"], sizey=h_inf["height_mm"], 
-                    xanchor="center", yanchor="bottom", layer="above", xref="x", yref="y"
-                ))
+                f_sim.add_layout_image(dict(source=h_src, x=0, y=h_y_pos, sizex=h_inf["width_mm"], sizey=h_inf["height_mm"], xanchor="center", yanchor="bottom", layer="above", xref="x", yref="y"))
 
             t_txt = f"Adım {cur_idx}" + (" - ⚠️ ÇARPIŞMA!" if coll else "")
             f_sim.update_layout(title=dict(text=t_txt, x=0.5, font=dict(color="red" if coll else "black")), height=600, plot_bgcolor="#f8fafc", xaxis=dict(range=[-200, 200], visible=False), yaxis=dict(range=[-150, 250], visible=False, scaleanchor="x", scaleratio=1), margin=dict(t=50, b=0, l=0, r=0), showlegend=False)
