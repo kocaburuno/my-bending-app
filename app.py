@@ -132,18 +132,23 @@ def add_smart_dims(fig, px, py, lengths):
         fig.add_trace(go.Scatter(x=[d1[0], d2[0]], y=[d1[1], d2[1]], mode='lines+markers', marker=dict(symbol='arrow', size=8, angleref='previous', color='black'), line=dict(color='black'), hoverinfo='skip'))
         fig.add_annotation(x=mid[0], y=mid[1], text=f"<b>{lengths[i]:.1f}</b>", showarrow=False, font=dict(color="#B22222", size=12), bgcolor="white")
 
-# --- 5.2 SİMÜLASYON MOTORU (ÇİFT EKSEN FLIP / ROTASYON) ---
+# --- 5.2 SİMÜLASYON MOTORU (GÖRELİ GEOMETRİ / RELATIVITY FIX) ---
 def generate_geometry_at_step(lengths, angles, dirs, thickness, radius, seq_order, current_step_idx, progress):
     """
-    Revize: DOWN (Aşağı) bükümde hem X hem Y ekseninde aynalama (Full Rotation).
-    Bu sayede Z-Büküm geometrisi doğru oryantasyonla kalıba oturur.
+    DÜZELTME: Geometri oluşturulurken, diğer bükümlerin yönü
+    'Aktif Büküm Yönü'ne göre belirlenir.
+    
+    Kural: 
+    - Eğer bir bükümün yönü, Aktif Büküm ile AYNI ise -> Makineye göre YUKARI (1) görünür.
+    - Eğer bir bükümün yönü, Aktif Büküm ile FARKLI ise -> Makineye göre AŞAĞI (-1) görünür.
     """
     
+    # 1. AÇILARI VE AKTİF YÖNÜ BELİRLE
     current_angles = [180.0] * len(angles)
     active_bend_idx = -1
+    active_dir = "UP" # Varsayılan
     active_target_angle = 180.0
-    
-    # Adım ve Açı Belirleme
+
     if current_step_idx > 0:
         past_steps = seq_order[:current_step_idx - 1]
         for step_num in past_steps:
@@ -157,9 +162,10 @@ def generate_geometry_at_step(lengths, angles, dirs, thickness, radius, seq_orde
             if 0 <= active_bend_idx < len(angles):
                 target = angles[active_bend_idx]
                 current_angles[active_bend_idx] = 180.0 - (180.0 - target) * progress
+                active_dir = dirs[active_bend_idx]
                 active_target_angle = current_angles[active_bend_idx]
 
-    # 1. HAM ŞEKİL OLUŞTURMA (Her zaman UP referanslı)
+    # 2. GÖRELİ GEOMETRİYİ OLUŞTUR (RELATIVE CONSTRUCTION)
     x_pts, y_pts = [0.0], [0.0]
     curr_ang = 0.0
     bend_coords = []
@@ -172,12 +178,21 @@ def generate_geometry_at_step(lengths, angles, dirs, thickness, radius, seq_orde
         
         if i < len(current_angles):
             bend_coords.append((nx, ny))
-            # d_val = 1 sabit, çünkü şekli oluşturup sonra komple çevireceğiz
-            d_val = 1 
+            
+            # --- KRİTİK DÜZELTME BURADA ---
+            # Eski kod: d_val = 1 (Her şeyi UP varsayıyordu)
+            # Yeni kod: O anki bükümün yönü (dirs[i]), aktif bükümün yönü (active_dir) ile
+            # aynıysa makineyle uyumludur (1), değilse terstir (-1).
+            
+            if dirs[i] == active_dir:
+                d_val = 1
+            else:
+                d_val = -1
+                
             dev_deg = (180.0 - current_angles[i])
             curr_ang += np.radians(dev_deg) * d_val
 
-    # 2. KALINLIK EKLEME
+    # 3. KALINLIK EKLE
     outer_x, outer_y, inner_x, inner_y = [], [], [], []
     for i in range(len(x_pts)-1):
         p1 = np.array([x_pts[i], y_pts[i]])
@@ -194,40 +209,25 @@ def generate_geometry_at_step(lengths, angles, dirs, thickness, radius, seq_orde
     final_x = outer_x + inner_x[::-1] + [outer_x[0]]
     final_y = outer_y + inner_y[::-1] + [outer_y[0]]
 
-    # 3. KONUMLANDIRMA ve ÇİFT EKSEN FLIP
+    # 4. HİZALAMA (Sadece Vektörel Düzeltme Yeterli)
+    # Artık "Flip" (Aynalama) yapmamıza gerek yok çünkü yukarıdaki döngüde
+    # parçayı zaten operatörün elindeki doğru oryantasyonla çizdik.
+    
     if active_bend_idx != -1:
-        active_dir = dirs[active_bend_idx]
-        
-        # DOWN ise hem Y hem X ekseninde ters çevir
-        if active_dir == "DOWN":
-            # Y Aynalama (Upside Down)
-            final_y = [-y for y in final_y]
-            y_pts = [-y for y in y_pts]
-            
-            # X Aynalama (Left-Right Mirror) - İSTEĞİNİZ ÜZERİNE EKLENDİ
-            final_x = [-x for x in final_x]
-            x_pts = [-x for x in x_pts]
-            
-            # Merkez Noktaları da çevir
-            bend_coords = [(-bx, -by) for bx, by in bend_coords]
-
-        # Merkeze Taşı
+        # A) MERKEZE TAŞIMA
         cx, cy = bend_coords[active_bend_idx]
         final_x = [x - cx for x in final_x]
         final_y = [y - cy for y in final_y]
         
-        # Vektör Hizalama (Simetrik Kalkış)
+        # B) VEKTÖR HİZALAMA (SİMETRİK KALKIŞ)
         p_center_x, p_center_y = x_pts[active_bend_idx+1], y_pts[active_bend_idx+1]
         p_prev_x, p_prev_y = x_pts[active_bend_idx], y_pts[active_bend_idx]
         
-        # DOWN durumunda noktaları yukarıda zaten çevirdiğimiz için 
-        # x_pts ve y_pts güncel haldedir, tekrar işlem yapmaya gerek yok.
-
         vec_x = p_prev_x - p_center_x
         vec_y = p_prev_y - p_center_y
         current_angle_rad = np.arctan2(vec_y, vec_x)
         
-        # Hedef Açı Hizalaması
+        # Hedef: Sol kol (180 - HedefAçı)/2 açısına bakmalı
         dev_half_rad = np.radians(180.0 - active_target_angle) / 2.0
         target_angle_rad = np.radians(180.0) - dev_half_rad
         
