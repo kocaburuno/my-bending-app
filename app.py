@@ -37,7 +37,7 @@ def process_and_crop_image(filename):
         img = Image.open(path).convert("RGBA")
         datas = img.getdata()
         newData = []
-        # Basit beyaz temizleme
+        # Basit beyaz temizleme toleransı
         for item in datas:
             if item[0] > 240 and item[1] > 240 and item[2] > 240:
                 newData.append((255, 255, 255, 0))
@@ -136,29 +136,26 @@ def add_smart_dims(fig, px, py, lengths):
         fig.add_trace(go.Scatter(x=[d1[0], d2[0]], y=[d1[1], d2[1]], mode='lines+markers', marker=dict(symbol='arrow', size=8, angleref='previous', color='black'), line=dict(color='black'), hoverinfo='skip'))
         fig.add_annotation(x=mid[0], y=mid[1], text=f"<b>{lengths[i]:.1f}</b>", showarrow=False, font=dict(color="#B22222", size=12), bgcolor="white")
 
-# --- 5.2 SİMÜLASYON MOTORU (DÜZELTİLMİŞ FİZİK - HER ZAMAN UP BÜKÜM) ---
+# --- 5.2 SİMÜLASYON MOTORU (DÜZELTİLMİŞ FİZİK - FLIP + BEND UP) ---
 def generate_geometry_at_step(lengths, angles, dirs, thickness, radius, seq_order, current_step_idx, progress):
     """
-    Abkant fizik motoru:
-    - Yön (UP/DOWN) ne olursa olsun büküm daima YUKARI (Z+) olur.
-    - DOWN komutu, sacın başlangıçta operatör tarafından TERS ÇEVRİLDİĞİNİ (Flip) belirtir.
+    DÜZELTME: 
+    - "DOWN" yönü seçildiğinde sac Y ekseninde aynalanır (Flip).
+    - Büküm hareketi daima V-Kalıbın dışına (YUKARI) doğru yapılır.
     """
     
-    # 1. AÇILARI HAZIRLA
     current_angles = [180.0] * len(angles)
     active_bend_idx = -1
     active_dir = "UP"
     active_target_angle = 180.0
 
     if current_step_idx > 0:
-        # Geçmiş adımları uygula
         past_steps = seq_order[:current_step_idx - 1]
         for step_num in past_steps:
             real_idx = step_num - 1
             if 0 <= real_idx < len(angles):
                 current_angles[real_idx] = angles[real_idx]
 
-        # Aktif adımı hesapla
         if (current_step_idx - 1) < len(seq_order):
             active_step_num = seq_order[current_step_idx - 1]
             active_bend_idx = active_step_num - 1
@@ -168,8 +165,7 @@ def generate_geometry_at_step(lengths, angles, dirs, thickness, radius, seq_orde
                 active_dir = dirs[active_bend_idx]
                 active_target_angle = current_angles[active_bend_idx]
 
-    # 2. HAM GEOMETRİYİ OLUŞTUR
-    # Sacın şeklini oluşturuyoruz (Henüz uzayda konumlandırılmamış hali)
+    # HAM GEOMETRİ (Her zaman UP formunda oluştur, sonra çevireceğiz)
     x_pts, y_pts = [0.0], [0.0]
     curr_ang = 0.0
     bend_coords = []
@@ -182,14 +178,13 @@ def generate_geometry_at_step(lengths, angles, dirs, thickness, radius, seq_orde
         
         if i < len(current_angles):
             bend_coords.append((nx, ny))
-            # ÖNEMLİ: Sacın formunu oluştururken her zaman standart (UP) gibi zincir kuruyoruz.
-            # Eğer DOWN seçildiyse, şekil aynıdır ama tüm parça uzayda terstir.
-            # O yüzden burada d_val = 1 sabit tutuyoruz.
+            # Burada d_val'ı her zaman 1 alıyoruz.
+            # Yönü (UP/DOWN) shape'i oluşturduktan sonra tüm koordinatları aynalayarak vereceğiz.
             d_val = 1 
             dev_deg = (180.0 - current_angles[i])
             curr_ang += np.radians(dev_deg) * d_val
 
-    # 3. KALINLIK EKLE
+    # KALINLIK EKLE
     outer_x, outer_y, inner_x, inner_y = [], [], [], []
     for i in range(len(x_pts)-1):
         p1 = np.array([x_pts[i], y_pts[i]])
@@ -206,39 +201,35 @@ def generate_geometry_at_step(lengths, angles, dirs, thickness, radius, seq_orde
     final_x = outer_x + inner_x[::-1] + [outer_x[0]]
     final_y = outer_y + inner_y[::-1] + [outer_y[0]]
 
-    # 4. HİZALAMA VE FLIP MANTIĞI
+    # KONUMLANDIRMA
     if active_bend_idx != -1:
         
-        # A) FLIP (Aynalama)
-        # Eğer büküm DOWN ise, operatör sacı ters çevirmiştir.
-        # Mevcut koordinatları Y ekseninde aynalıyoruz.
+        # 1. FLIP (AYNALAMA) İŞLEMİ
+        # Eğer operasyon "DOWN" ise sacı ters çevir.
         if active_dir == "DOWN":
             final_y = [-y for y in final_y]
+            # Referans noktalarını da güncelle
             y_pts = [-y for y in y_pts]
             bend_coords = [(bx, -by) for bx, by in bend_coords]
 
-        # B) MERKEZE TAŞIMA
-        # Aktif büküm noktasını (0,0) noktasına alıyoruz
+        # 2. MERKEZE TAŞIMA
         cx, cy = bend_coords[active_bend_idx]
         final_x = [x - cx for x in final_x]
         final_y = [y - cy for y in final_y]
         
-        # C) VEKTÖR HİZALAMA
-        # Büküm merkezinden BİR ÖNCEKİ noktaya giden vektörü buluyoruz (Giriş Kolu)
+        # 3. VEKTÖR HİZALAMA (SİMETRİK KALKIŞ)
         p_center_x, p_center_y = x_pts[active_bend_idx+1], y_pts[active_bend_idx+1]
         p_prev_x, p_prev_y = x_pts[active_bend_idx], y_pts[active_bend_idx]
         
-        # Eğer Flip yaptıysak referans noktalarını da flip ediyoruz
-        if active_dir == "DOWN":
-             p_center_y = -p_center_y
-             p_prev_y = -p_prev_y
+        # Eğer Flip olduysa noktalar değişti, tekrar güncellemeye gerek yok çünkü
+        # yukarıda y_pts listesini zaten güncelledik.
 
         vec_x = p_prev_x - p_center_x
         vec_y = p_prev_y - p_center_y
         current_angle_rad = np.arctan2(vec_y, vec_x)
         
-        # HEDEF AÇI: Simetrik V-Büküm
-        # Sacın giriş kolu (sol taraf), hedef açının yarısı kadar yukarı bakmalı.
+        # HEDEF: Sol kol (180 - HedefAçı)/2 açısına bakmalı (Pozitif Y yönünde)
+        # Örnek: 90 derece büküm -> (180-90)/2 = 45 derece kalkmalı.
         dev_half_rad = np.radians(180.0 - active_target_angle) / 2.0
         target_angle_rad = np.radians(180.0) - dev_half_rad
         
@@ -256,17 +247,14 @@ def generate_geometry_at_step(lengths, angles, dirs, thickness, radius, seq_orde
     return final_x, final_y, active_bend_idx
 
 def check_collision(x_vals, y_vals, punch_w, punch_h, die_w, die_h, current_y_stroke):
-    """Basit kutu çarpışma kontrolü."""
     is_collision = False
     p_left, p_right = -punch_w / 2.0 + 2.0, punch_w / 2.0 - 2.0
     p_bottom = current_y_stroke
     d_left, d_right, d_top = -die_w / 2.0, die_w / 2.0, 0.0
     
     for x, y in zip(x_vals, y_vals):
-        # Bıçak Çarpışması
         if y > p_bottom + 1.0 and (p_left < x < p_right):
             is_collision = True; break
-        # Kalıp Çarpışması (Die Zone)
         if y < d_top - 1.0 and (d_left < x < d_right):
             is_collision = True; break
     return is_collision
@@ -357,7 +345,6 @@ with tab2:
         frames = np.linspace(0, 1, 15) if st.session_state.get("sim_active", False) else [1.0]
         if st.session_state.sim_step_idx == 0: frames = [0.0]
         
-        # Seçili Tool Bilgileri
         p_inf = TOOL_DB["punches"][sel_punch]
         d_inf = TOOL_DB["dies"][sel_die]
         h_inf = TOOL_DB["holder"]
@@ -366,51 +353,44 @@ with tab2:
             cur_idx = st.session_state.sim_step_idx 
             sx, sy, act_idx = generate_geometry_at_step(cur_l, cur_a, cur_d, th, rad, valid_seq, cur_idx, fr)
             
-            # Stroke Hareketi
             s_max, s_tgt = 150.0, th
             c_str = s_max if cur_idx == 0 else s_max - (s_max - s_tgt) * fr
             
-            # Çarpışma Testi
             coll = check_collision(sx, sy, p_inf["width_mm"], p_inf["height_mm"], d_inf["width_mm"], d_inf["height_mm"], c_str)
             col_code = "#dc2626" if coll else "#4682b4"
             
             f_sim = go.Figure()
             
-            # 1. Alt Kalıp (Die) - En Alt Katman
+            # KATMANLAR (Layers)
+            # 1. Alt Kalıp (Die)
             d_src = process_and_crop_image(d_inf["filename"])
             if d_src: 
                 f_sim.add_layout_image(dict(
-                    source=d_src, 
-                    x=0, y=0, 
+                    source=d_src, x=0, y=0, 
                     sizex=d_inf["width_mm"], sizey=d_inf["height_mm"], 
-                    xanchor="center", yanchor="top", 
-                    layer="below", xref="x", yref="y"
+                    xanchor="center", yanchor="top", layer="below", xref="x", yref="y"
                 ))
 
-            # 2. Sac (Sheet) - Orta Katman
+            # 2. Sac (Sheet)
             f_sim.add_trace(go.Scatter(x=sx, y=sy, fill='toself', fillcolor=col_code, line=dict(color='black', width=1), opacity=0.9))
             
-            # 3. Üst Bıçak (Punch) - Üst Katman
+            # 3. Üst Bıçak (Punch)
             p_src = process_and_crop_image(p_inf["filename"])
             if p_src: 
                 f_sim.add_layout_image(dict(
-                    source=p_src, 
-                    x=0, y=c_str, 
+                    source=p_src, x=0, y=c_str, 
                     sizex=p_inf["width_mm"], sizey=p_inf["height_mm"], 
-                    xanchor="center", yanchor="bottom", 
-                    layer="above", xref="x", yref="y"
+                    xanchor="center", yanchor="bottom", layer="above", xref="x", yref="y"
                 ))
             
-            # 4. Tutucu (Holder) - En Üst Katman
+            # 4. Tutucu (Holder)
             h_src = process_and_crop_image(h_inf["filename"])
             if h_src: 
                 h_y_pos = c_str + p_inf["height_mm"]
                 f_sim.add_layout_image(dict(
-                    source=h_src, 
-                    x=0, y=h_y_pos, 
+                    source=h_src, x=0, y=h_y_pos, 
                     sizex=h_inf["width_mm"], sizey=h_inf["height_mm"], 
-                    xanchor="center", yanchor="bottom", 
-                    layer="above", xref="x", yref="y"
+                    xanchor="center", yanchor="bottom", layer="above", xref="x", yref="y"
                 ))
 
             t_txt = f"Adım {cur_idx}" + (" - ⚠️ ÇARPIŞMA!" if coll else "")
