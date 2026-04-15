@@ -140,12 +140,12 @@ def align_expert_press(x, y, centers, step_seq, th, bends_data, current_frame_an
     c_data = next((c for c in centers if c['seq'] == step_seq), centers[0])
     idx = bends_data['seq'].index(step_seq)
     
-    # 1. Parçayı orijine al
+    # Parçayı orijine al
     nx = np.array(x) - c_data['x']
     ny = np.array(y) - c_data['y']
     a_ref = c_data['angle_pre']
     
-    # 2. Vektör açılarını belirle (Gelen ve Giden flanşlar)
+    # Vektör açılarını belirle (Gelen ve Giden flanşlar)
     theta_in = a_ref + np.pi
     turn = np.radians(180.0 - current_frame_angle)
     if bends_data['dirs'][idx] == "DOWN":
@@ -156,12 +156,11 @@ def align_expert_press(x, y, centers, step_seq, th, bends_data, current_frame_an
     fx = bends_data['flip_x'][idx]
     fy = bends_data['flip_y'][idx]
     
-    # 3. Geometrik Taklaları Uygula (Makine yalnızca UP yönde basar)
+    # Geometrik Taklaları Uygula
     if is_down: ny = -ny
     if fx: nx = -nx
     if fy: ny = -ny
         
-    # 4. Aynı taklaları matematiksel vektörlere de uygula
     def transform_angle(theta):
         vx, vy = np.cos(theta), np.sin(theta)
         if is_down: vy = -vy
@@ -172,7 +171,7 @@ def align_expert_press(x, y, centers, step_seq, th, bends_data, current_frame_an
     t_in = transform_angle(theta_in)
     t_out = transform_angle(theta_out)
     
-    # 5. Açıortayı (Bisector) Bul ve 90 Dereceye (UP) Kilitle
+    # Açıortayı (Bisector) Bul ve 90 Dereceye (UP) Kilitle
     v_in = np.array([np.cos(t_in), np.sin(t_in)])
     v_out = np.array([np.cos(t_out), np.sin(t_out)])
     v_bisect = v_in + v_out
@@ -183,24 +182,13 @@ def align_expert_press(x, y, centers, step_seq, th, bends_data, current_frame_an
         bisect_angle = np.arctan2(v_bisect[1], v_bisect[0])
         rot_offset = np.pi/2 - bisect_angle
         
-    # 6. Kusursuz Rotasyonu Uygula
+    # Kusursuz Rotasyonu Uygula
     cos_t, sin_t = np.cos(rot_offset), np.sin(rot_offset)
     rx = nx * cos_t - ny * sin_t
     ry = nx * sin_t + ny * cos_t
     
-    # V-Kanal derinliğine oturt (stroke_depth)
+    # V-Kanal derinliğine oturt
     return rx.tolist(), (ry + die_height - stroke_depth + th/2.0).tolist()
-
-def check_realistic_collision(x, y, v_width, punch_w, die_height):
-    safe_v = v_width / 2.0
-    for px, py in zip(x, y):
-        # Sadece V-Kanalı DIŞINDAKİ düz kütük alanına çarpmaları denetle
-        if py < die_height - 0.5 and abs(px) > safe_v: 
-            return True, "ALT KALIBA ÇARPIYOR! (V-Kanal Dışı)"
-        # Bıçağın gövdesine çarpmaları denetle
-        if py > die_height + 40.0 and abs(px) < (punch_w/2.0):
-            return True, "ÜST BIÇAĞA ÇARPIYOR!"
-    return False, None
 
 def add_smart_dims_detailed(fig, px, py, lengths):
     offset = 65.0
@@ -256,10 +244,7 @@ tab1, tab2 = st.tabs(["📐 Teknik Detaylar", "🎬 Statik Eğitim Simülatörü
 with tab1:
     st.markdown(f"""<div class="result-card"><div class="result-value">AÇINIM: {f_len:.2f} mm</div><small>Dış Toplam: {t_l:.1f} mm</small></div>""", unsafe_allow_html=True)
     
-    # Teknik resim çizimi
     sx, sy, g_centers = generate_expert_geometry(cur_l, cur_a, cur_d, th_val, rd_val, 999, 1.0)
-    
-    # Boyutlandırma için dış konturu (apex noktalarını) ayıkla
     ax, ay = [0.0], [0.0]
     curr_x, curr_y, curr_ang = 0.0, 0.0, 0.0
     for i in range(len(cur_l)):
@@ -301,32 +286,30 @@ with tab2:
             
             fig_start = go.Figure()
             draw_tools(fig_start, p_inf, d_inf, h_inf, punch_y_start)
-            fig_start.add_trace(go.Scatter(x=fx_start, y=fy_start, fill='toself', fillcolor='#3b82f6', line=dict(color='#1e3a8a', width=1.5), mode='lines', name="Sac"))
+            fig_start.add_trace(go.Scatter(x=fx_start, y=fy_start, fill='toself', fillcolor='#3b82f6', line=dict(color='black', width=1.5), mode='lines', name="Sac"))
             fig_start.update_layout(height=650, plot_bgcolor="#f8fafc", xaxis=dict(visible=False, range=[-150, 150]), yaxis=dict(visible=False, range=[-50, 300], scaleanchor="x", scaleratio=1), margin=dict(l=0, r=0, t=0, b=0), showlegend=False)
             st.plotly_chart(fig_start, use_container_width=True)
 
         # --- SAĞ KARE: BÜKÜM BİTİŞİ ---
         with col_end:
-            st.markdown("<h4 style='text-align: center; color: #b91c1c;'>Büküm Bitişi</h4>", unsafe_allow_html=True)
+            st.markdown("<h4 style='text-align: center; color: #1e3a8a;'>Büküm Bitişi</h4>", unsafe_allow_html=True)
             if sim_idx == 0:
                 st.plotly_chart(fig_start, use_container_width=True) 
             else:
                 idx = st.session_state.bending_data["seq"].index(active_seq_val)
                 target_a = cur_a[idx]
                 
-                # Bıçağın V-Kanal içindeki ineceği tam derinlik
                 stroke_depth_end = (d_inf['v_width'] / 2.0) * np.tan(np.radians((180.0 - target_a) / 2.0))
                 
                 gx_end, gy_end, g_centers = generate_expert_geometry(cur_l, cur_a, cur_d, th_val, rd_val, active_seq_val, 1.0)
                 fx_end, fy_end = align_expert_press(gx_end, gy_end, g_centers, active_seq_val, th_val, st.session_state.bending_data, target_a, die_h, stroke_depth_end)
                 
                 punch_y_end = die_h + th_val - stroke_depth_end
-                is_col, col_msg = check_realistic_collision(fx_end, fy_end, d_inf['v_width'], p_inf['w'], die_h)
                 
                 fig_end = go.Figure()
                 draw_tools(fig_end, p_inf, d_inf, h_inf, punch_y_end)
-                fig_end.add_trace(go.Scatter(x=fx_end, y=fy_end, fill='toself', fillcolor='#ef4444' if is_col else '#3b82f6', line=dict(color='black', width=1.5), mode='lines', name="Sac"))
+                # Çarpışma rengi (kırmızı) kaldırıldı, daima standart renk
+                fig_end.add_trace(go.Scatter(x=fx_end, y=fy_end, fill='toself', fillcolor='#3b82f6', line=dict(color='black', width=1.5), mode='lines', name="Sac"))
                 
-                if is_col: fig_end.add_annotation(x=0, y=140, text=f"⚠️ {col_msg}", font=dict(size=16, color="white"), bgcolor="#ef4444", showarrow=False)
                 fig_end.update_layout(height=650, plot_bgcolor="#f8fafc", xaxis=dict(visible=False, range=[-150, 150]), yaxis=dict(visible=False, range=[-50, 300], scaleanchor="x", scaleratio=1), margin=dict(l=0, r=0, t=0, b=0), showlegend=False)
                 st.plotly_chart(fig_end, use_container_width=True)
