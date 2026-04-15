@@ -20,43 +20,46 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# --- 2. CAD TABANLI TAKIM ÇİZİM MOTORU (PNG'LER İPTAL) ---
+# --- 2. CAD TABANLI MATEMATİKSEL ÇİZİM MOTORU (RESİMLER İPTAL) ---
 def get_punch_coords(y_offset, width=15.0, angle=135.0, height=100.0):
-    """CAD ölçülerine göre üst bıçağı çizer."""
+    """CAD ölçülerine göre üst bıçağı (Punch) çizer."""
     tip_depth = (width / 2.0) / np.tan(np.radians(angle / 2.0))
     x = [0, width/2, width/2, -width/2, -width/2, 0]
     y = [y_offset, y_offset + tip_depth, y_offset + height, y_offset + height, y_offset + tip_depth, y_offset]
     return x, y
 
 def get_die_coords(v_width, angle=135.0, width=60.0, height=75.0):
-    """CAD ölçülerine göre alt kalıbı (V-Kanal) çizer."""
+    """CAD ölçülerine göre alt kalıbı (Die) çizer."""
     v_depth = (v_width / 2.0) / np.tan(np.radians(angle / 2.0))
     x = [-width/2, -v_width/2, 0, v_width/2, width/2, width/2, -width/2, -width/2]
     y = [height, height, height - v_depth, height, height, 0, 0, height]
     return x, y
 
 def get_holder_coords(width=200.0, height=100.0):
-    """Kalıp tutucuyu çizer."""
+    """CAD ölçülerine göre alt kalıp tutucuyu (Holder) çizer."""
     x = [-width/2, width/2, width/2, -width/2, -width/2]
     y = [0, 0, -height, -height, 0]
     return x, y
 
 def draw_tools(fig, p_inf, d_inf, h_inf, punch_y):
-    """Takımları CAD renkleriyle simülasyona ekler."""
+    """Takımları CAD renkleriyle simülasyona ekler. Dots/Nokta hatalarını mode='lines' ile önler."""
+    # Siyah Tutucu
     hx, hy = get_holder_coords(h_inf['w'], h_inf['h'])
-    fig.add_trace(go.Scatter(x=hx, y=hy, fill='toself', fillcolor='#000000', line=dict(color='white', width=1), mode='lines', hoverinfo='skip', showlegend=False))
+    fig.add_trace(go.Scatter(x=hx, y=hy, fill='toself', fillcolor='#000000', line=dict(color='#000000', width=1), mode='lines', hoverinfo='skip', showlegend=False))
     
+    # Turuncu Kalıp (V15, V25, V50)
     dx, dy = get_die_coords(d_inf['v_width'], d_inf['angle'], d_inf['w'], d_inf['h'])
-    fig.add_trace(go.Scatter(x=dx, y=dy, fill='toself', fillcolor='#ED6C2A', line=dict(color='#ca5116', width=1), mode='lines', hoverinfo='skip', showlegend=False))
+    fig.add_trace(go.Scatter(x=dx, y=dy, fill='toself', fillcolor='#ED6C2A', line=dict(color='#A84718', width=1), mode='lines', hoverinfo='skip', showlegend=False))
     
+    # Yeşil Bıçak
     px, py = get_punch_coords(punch_y, p_inf['w'], p_inf['angle'], p_inf['h'])
-    fig.add_trace(go.Scatter(x=px, y=py, fill='toself', fillcolor='#1E7B44', line=dict(color='#114d29', width=1), mode='lines', hoverinfo='skip', showlegend=False))
+    fig.add_trace(go.Scatter(x=px, y=py, fill='toself', fillcolor='#1E7B44', line=dict(color='#114A28', width=1), mode='lines', hoverinfo='skip', showlegend=False))
 
-# --- 3. PARAMETRİK VERİTABANI (Kullanıcı Talebine Göre) ---
+# --- 3. PARAMETRİK VERİTABANI (İstenen 3 Farklı Kalıp) ---
 TOOL_DB = {
     "holder": {"w": 200.0, "h": 100.0},
     "punches": {
-        "Bıçak (15mm, 135°)": {"w": 15.0, "angle": 135.0, "h": 100.0}
+        "Standart Bıçak (15mm)": {"w": 15.0, "angle": 135.0, "h": 100.0}
     },
     "dies": {
         "Kalıp V15 (135°)": {"v_width": 15.0, "angle": 135.0, "w": 60.0, "h": 75.0},
@@ -74,6 +77,7 @@ if "bending_data" not in st.session_state:
 
 # --- 5. HESAPLAMA MOTORLARI ---
 def calculate_flat_len(lengths, angles, thickness):
+    """K-Faktörü yaklaşımı ile açınım hesabı."""
     total_outer = sum(lengths)
     loss = 0.0
     for ang in angles:
@@ -81,7 +85,7 @@ def calculate_flat_len(lengths, angles, thickness):
     return total_outer - loss, total_outer
 
 def generate_expert_geometry(lengths, angles, dirs, thickness, inner_radius, target_seq, fr):
-    """Büküm sırasına göre sacın geometrisini oluşturur."""
+    """Sıralamaya göre sacın geometrisini oluşturur."""
     outer_radius = inner_radius + thickness
     curr_x, curr_y, curr_ang = 0.0, 0.0, 0.0
     apex_x, apex_y = [0.0], [0.0]
@@ -143,10 +147,7 @@ def generate_expert_geometry(lengths, angles, dirs, thickness, inner_radius, tar
     return top_x + bot_x[::-1] + [top_x[0]], top_y + bot_y[::-1] + [top_y[0]], apex_x, apex_y, bend_centers
 
 def align_expert_press(x, y, centers, step_seq, th, bends_data, current_frame_angle, die_height, stroke_depth):
-    """
-    DÜZELTME: Büküm anında sac kalıbın omuzlarına simetrik olarak oturur 
-    ve stroke_depth kadar V-kanalının içine dalar.
-    """
+    """Büküm anında sac kalıbın omuzlarına simetrik olarak oturur ve V-kanalının içine dalar."""
     c_data = next((c for c in centers if c['seq'] == step_seq), centers[0])
     idx = bends_data['seq'].index(step_seq)
     
@@ -157,7 +158,6 @@ def align_expert_press(x, y, centers, step_seq, th, bends_data, current_frame_an
     if bends_data['flip_x'][idx]: nx = -nx; a_ref = np.pi - a_ref
     if bends_data['flip_y'][idx]: ny = -ny
         
-    # Her iki tarafın eşit havaya kalkması için simetrik dönüş
     rot_offset = np.radians(180.0 - current_frame_angle) / 2.0
     rotation = -a_ref - rot_offset if bends_data['dirs'][idx] == "UP" else -a_ref + rot_offset
         
@@ -165,16 +165,17 @@ def align_expert_press(x, y, centers, step_seq, th, bends_data, current_frame_an
     rx = nx * cos_t - ny * sin_t
     ry = nx * sin_t + ny * cos_t
     
-    # Derinlik (V-Kanalına giriş) hesabı eklenmiş nihai yükseklik
-    return rx.tolist(), (ry + die_height - stroke_depth + th).tolist()
+    # stroke_depth ile kalıbın içine sokuyoruz
+    return rx.tolist(), (ry + die_height - stroke_depth + th/2.0).tolist()
 
 def check_realistic_collision(x, y, v_width, punch_w, die_height):
-    """Sacın kalıbın dış gövdesine veya bıçağın kalın gövdesine çarpmasını denetler."""
+    """Sacın kalıbın dış gövdesine veya bıçağın gövdesine çarpmasını denetler."""
     safe_v = v_width / 2.0
     for px, py in zip(x, y):
-        # V-Kanalı dışındaki kalıp gövdesine çarpma
         if py < die_height - 0.5 and abs(px) > safe_v: 
             return True, "ALT KALIBA ÇARPIYOR! (V-Kanal Dışı)"
+        if py > die_height + 30.0 and abs(px) < (punch_w/2.0):
+            return True, "ÜST BIÇAĞA ÇARPIYOR!"
     return False, None
 
 def add_smart_dims_detailed(fig, px, py, lengths):
@@ -226,7 +227,7 @@ with st.sidebar:
 cur_l, cur_a, cur_d = st.session_state.bending_data["lengths"], st.session_state.bending_data["angles"], st.session_state.bending_data["dirs"]
 f_len, t_l = calculate_flat_len(cur_l, cur_a, th_val)
 
-tab1, tab2 = st.tabs(["📐 Teknik Detaylar", "🎬 Statik Büküm İncelemesi"])
+tab1, tab2 = st.tabs(["📐 Teknik Detaylar", "🎬 Statik Eğitim Simülatörü"])
 
 with tab1:
     st.markdown(f"""<div class="result-card"><div class="result-value">AÇINIM: {f_len:.2f} mm</div><small>Dış Toplam: {t_l:.1f} mm</small></div>""", unsafe_allow_html=True)
@@ -249,7 +250,7 @@ with tab2:
         p_inf, d_inf, h_inf = TOOL_DB["punches"][sel_punch], TOOL_DB["dies"][sel_die], TOOL_DB["holder"]
         die_h = d_inf['h']
         
-        # --- 1. KARE: BÜKÜM BAŞLANGICI ---
+        # --- SOL KARE: BÜKÜM BAŞLANGICI ---
         with col_start:
             st.markdown("<h4 style='text-align: center; color: #475569;'>Büküm Başlangıcı</h4>", unsafe_allow_html=True)
             active_seq_val = sorted_seqs[sim_idx - 1] if sim_idx > 0 else 0
@@ -257,20 +258,20 @@ with tab2:
             gx_start, gy_start, _, _, g_centers = generate_expert_geometry(cur_l, cur_a, cur_d, th_val, rd_val, active_seq_val, 0.0)
             
             if sim_idx == 0:
-                mid = len(gx_start)//4; fx_start = [v - gx_start[mid] for v in gx_start]; fy_start = [v + die_h for v in gy_start]
+                mid = len(gx_start)//4; fx_start = [v - gx_start[mid] for v in gx_start]; fy_start = [v + die_h + th_val/2.0 for v in gy_start]
             else:
+                # Başlangıçta sac bükülmediği için target açı 180, stroke derinliği 0
                 fx_start, fy_start = align_expert_press(gx_start, gy_start, g_centers, active_seq_val, th_val, st.session_state.bending_data, 180.0, die_h, stroke_depth=0.0)
                 
-            punch_y_start = die_h + th_val # Bıçak tam sacın üst yüzeyinde
+            punch_y_start = die_h + th_val # Bıçak sacın üst yüzeyinde hazır bekliyor
             
             fig_start = go.Figure()
             draw_tools(fig_start, p_inf, d_inf, h_inf, punch_y_start)
-            # Dots (noktalar) çıkmaması için mode='lines' zorunlu kılındı
             fig_start.add_trace(go.Scatter(x=fx_start, y=fy_start, fill='toself', fillcolor='#3b82f6', line=dict(color='#1e3a8a', width=1.5), mode='lines', name="Sac"))
-            fig_start.update_layout(height=650, plot_bgcolor="#f8fafc", xaxis=dict(visible=False, range=[-150, 150]), yaxis=dict(visible=False, range=[-100, 250], scaleanchor="x", scaleratio=1), margin=dict(l=0, r=0, t=0, b=0), showlegend=False)
+            fig_start.update_layout(height=650, plot_bgcolor="#f8fafc", xaxis=dict(visible=False, range=[-150, 150]), yaxis=dict(visible=False, range=[-50, 300], scaleanchor="x", scaleratio=1), margin=dict(l=0, r=0, t=0, b=0), showlegend=False)
             st.plotly_chart(fig_start, use_container_width=True)
 
-        # --- 2. KARE: BÜKÜM BİTİŞİ ---
+        # --- SAĞ KARE: BÜKÜM BİTİŞİ ---
         with col_end:
             st.markdown("<h4 style='text-align: center; color: #b91c1c;'>Büküm Bitişi</h4>", unsafe_allow_html=True)
             if sim_idx == 0:
@@ -279,7 +280,7 @@ with tab2:
                 idx = st.session_state.bending_data["seq"].index(active_seq_val)
                 target_a = cur_a[idx]
                 
-                # Bıçağın ineceği derinlik (V-Kanal ve Açı Trigonometrisi)
+                # Bıçağın V-Kanal içindeki ineceği derinlik trigonometrisi
                 stroke_depth_end = (d_inf['v_width'] / 2.0) * np.tan(np.radians((180.0 - target_a) / 2.0))
                 
                 gx_end, gy_end, _, _, g_centers = generate_expert_geometry(cur_l, cur_a, cur_d, th_val, rd_val, active_seq_val, 1.0)
@@ -293,5 +294,5 @@ with tab2:
                 fig_end.add_trace(go.Scatter(x=fx_end, y=fy_end, fill='toself', fillcolor='#ef4444' if is_col else '#3b82f6', line=dict(color='black', width=1.5), mode='lines', name="Sac"))
                 
                 if is_col: fig_end.add_annotation(x=0, y=120, text=f"⚠️ {col_msg}", font=dict(size=16, color="white"), bgcolor="#ef4444", showarrow=False)
-                fig_end.update_layout(height=650, plot_bgcolor="#f8fafc", xaxis=dict(visible=False, range=[-150, 150]), yaxis=dict(visible=False, range=[-100, 250], scaleanchor="x", scaleratio=1), margin=dict(l=0, r=0, t=0, b=0), showlegend=False)
+                fig_end.update_layout(height=650, plot_bgcolor="#f8fafc", xaxis=dict(visible=False, range=[-150, 150]), yaxis=dict(visible=False, range=[-50, 300], scaleanchor="x", scaleratio=1), margin=dict(l=0, r=0, t=0, b=0), showlegend=False)
                 st.plotly_chart(fig_end, use_container_width=True)
