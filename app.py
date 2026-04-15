@@ -22,14 +22,12 @@ st.markdown("""
 
 # --- 2. CAD TABANLI MATEMATİKSEL ÇİZİM MOTORU ---
 def get_punch_coords(y_offset, width=15.0, angle=90.0, height=100.0):
-    """CAD ölçülerine göre üst bıçağı (Punch) çizer. Açı düzeltildi (90°)."""
     tip_depth = (width / 2.0) / np.tan(np.radians(angle / 2.0))
     x = [0, width/2, width/2, -width/2, -width/2, 0]
     y = [y_offset, y_offset + tip_depth, y_offset + height, y_offset + height, y_offset + tip_depth, y_offset]
     return x, y
 
 def get_die_coords(v_width, angle=90.0, width=60.0, height=75.0):
-    """CAD ölçülerine göre alt kalıbı (Die) çizer. Açı düzeltildi (90°)."""
     v_depth = (v_width / 2.0) / np.tan(np.radians(angle / 2.0))
     x = [-width/2, -v_width/2, 0, v_width/2, width/2, width/2, -width/2, -width/2]
     y = [height, height, height - v_depth, height, height, 0, 0, height]
@@ -50,7 +48,7 @@ def draw_tools(fig, p_inf, d_inf, h_inf, punch_y):
     px, py = get_punch_coords(punch_y, p_inf['w'], p_inf['angle'], p_inf['h'])
     fig.add_trace(go.Scatter(x=px, y=py, fill='toself', fillcolor='#1E7B44', line=dict(color='#114A28', width=1), mode='lines', hoverinfo='skip', showlegend=False))
 
-# --- 3. PARAMETRİK VERİTABANI (Düzeltilmiş İç Açılar: 90°) ---
+# --- 3. PARAMETRİK VERİTABANI ---
 TOOL_DB = {
     "holder": {"w": 200.0, "h": 100.0},
     "punches": {
@@ -65,7 +63,7 @@ TOOL_DB = {
 
 if "bending_data" not in st.session_state:
     st.session_state.bending_data = {
-        "lengths": [50.0, 50.0, 50.0], "angles": [90.0, 90.0], "dirs": ["UP", "DOWN"], "seq": [1, 2]
+        "lengths": [50.0, 50.0, 50.0], "angles": [90.0, 90.0], "dirs": ["U", "D"], "seq": [1, 2]
     }
 
 # --- 4. HESAPLAMA MOTORLARI ---
@@ -89,7 +87,7 @@ def generate_expert_geometry(lengths, angles, dirs, thickness, inner_radius, tar
             if this_seq < target_seq: act_a = angles[i]
             elif this_seq == target_seq: act_a = 180.0 - (180.0 - angles[i]) * fr
             else: act_a = 180.0
-            curr_ang += np.radians(180.0 - act_a) * (1 if dirs[i] == "UP" else -1)
+            curr_ang += np.radians(180.0 - act_a) * (1 if dirs[i] == "U" else -1)
 
     top_x, top_y, bot_x, bot_y = [0.0], [thickness], [0.0], [0.0]
     bend_centers, setbacks = [], [0.0]
@@ -115,7 +113,7 @@ def generate_expert_geometry(lengths, angles, dirs, thickness, inner_radius, tar
             if seq_map[i] <= target_seq:
                 cur_a = angles[i] if seq_map[i] < target_seq else (180.0 - (180.0 - angles[i]) * fr)
                 dev = 180.0 - cur_a
-                d_val = 1 if dirs[i] == "UP" else -1
+                d_val = 1 if dirs[i] == "U" else -1
                 
                 if d_val == 1:
                     cx = c_px + dx - nx * inner_radius; cy = c_py + dy - ny * inner_radius
@@ -147,7 +145,7 @@ def align_expert_press(x, y, centers, step_seq, th, bends_data, current_frame_an
     b_dir = bends_data['dirs'][idx]
     
     dev = 180.0 - current_frame_angle
-    if b_dir == "DOWN": dev = -dev
+    if b_dir == "D": dev = -dev
     a_out = a_ref + np.radians(dev)
     
     u1_angle = a_ref + np.pi 
@@ -201,13 +199,13 @@ with st.sidebar:
             cl, ca, cd, csq = st.columns([1.2, 1, 1.2, 1])
             st.session_state.bending_data["lengths"][i+1] = cl.number_input("L", value=st.session_state.bending_data["lengths"][i+1], key=f"L{i}")
             st.session_state.bending_data["angles"][i] = ca.number_input("A°", value=st.session_state.bending_data["angles"][i], key=f"A{i}")
-            st.session_state.bending_data["dirs"][i] = cd.selectbox("Yön", ["UP", "DOWN"], index=0 if st.session_state.bending_data["dirs"][i]=="UP" else 1, key=f"D{i}")
+            st.session_state.bending_data["dirs"][i] = cd.selectbox("Yön", ["U", "D"], index=0 if st.session_state.bending_data["dirs"][i]=="U" else 1, key=f"D{i}")
             st.session_state.bending_data["seq"][i] = csq.number_input("Sıra", value=int(st.session_state.bending_data["seq"][i]), step=1, key=f"S{i}")
 
     st.divider()
     c_btn1, c_btn2 = st.columns(2)
     if c_btn1.button("➕ EKLE"):
-        st.session_state.bending_data["lengths"].append(50.0); st.session_state.bending_data["angles"].append(90.0); st.session_state.bending_data["dirs"].append("UP")
+        st.session_state.bending_data["lengths"].append(50.0); st.session_state.bending_data["angles"].append(90.0); st.session_state.bending_data["dirs"].append("U")
         st.session_state.bending_data["seq"].append(len(st.session_state.bending_data["angles"]))
         st.rerun()
     if c_btn2.button("🗑️ SİL") and len(st.session_state.bending_data["angles"]) > 0:
@@ -229,7 +227,7 @@ with tab1:
     for i in range(len(cur_l)):
         curr_x += cur_l[i] * np.cos(curr_ang); curr_y += cur_l[i] * np.sin(curr_ang)
         ax.append(curr_x); ay.append(curr_y)
-        if i < len(cur_a): curr_ang += np.radians(180.0 - cur_a[i]) * (1 if cur_d[i] == "UP" else -1)
+        if i < len(cur_a): curr_ang += np.radians(180.0 - cur_a[i]) * (1 if cur_d[i] == "U" else -1)
 
     fig2d = go.Figure()
     fig2d.add_trace(go.Scatter(x=sx, y=sy, fill='toself', fillcolor='rgba(71, 85, 105, 0.3)', line=dict(color='#1e293b', width=2), mode='lines'))
@@ -273,7 +271,6 @@ with tab2:
             idx = st.session_state.bending_data["seq"].index(active_seq_val)
             target_a = cur_a[idx]
             
-            # Kalıbın tam derinliğine inen formül (90 derece iç açıya göre)
             stroke_depth_end = (d_inf['v_width'] / 2.0) * np.tan(np.radians((180.0 - target_a) / 2.0))
             
             gx_end, gy_end, g_centers_end = generate_expert_geometry(cur_l, cur_a, cur_d, th_val, rd_val, active_seq_val, 1.0)
