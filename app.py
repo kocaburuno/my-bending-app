@@ -21,13 +21,15 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # --- 2. CAD TABANLI MATEMATİKSEL ÇİZİM MOTORU ---
-def get_punch_coords(y_offset, width=15.0, angle=135.0, height=100.0):
+def get_punch_coords(y_offset, width=15.0, angle=90.0, height=100.0):
+    """CAD ölçülerine göre üst bıçağı (Punch) çizer. Açı düzeltildi (90°)."""
     tip_depth = (width / 2.0) / np.tan(np.radians(angle / 2.0))
     x = [0, width/2, width/2, -width/2, -width/2, 0]
     y = [y_offset, y_offset + tip_depth, y_offset + height, y_offset + height, y_offset + tip_depth, y_offset]
     return x, y
 
-def get_die_coords(v_width, angle=135.0, width=60.0, height=75.0):
+def get_die_coords(v_width, angle=90.0, width=60.0, height=75.0):
+    """CAD ölçülerine göre alt kalıbı (Die) çizer. Açı düzeltildi (90°)."""
     v_depth = (v_width / 2.0) / np.tan(np.radians(angle / 2.0))
     x = [-width/2, -v_width/2, 0, v_width/2, width/2, width/2, -width/2, -width/2]
     y = [height, height, height - v_depth, height, height, 0, 0, height]
@@ -48,16 +50,16 @@ def draw_tools(fig, p_inf, d_inf, h_inf, punch_y):
     px, py = get_punch_coords(punch_y, p_inf['w'], p_inf['angle'], p_inf['h'])
     fig.add_trace(go.Scatter(x=px, y=py, fill='toself', fillcolor='#1E7B44', line=dict(color='#114A28', width=1), mode='lines', hoverinfo='skip', showlegend=False))
 
-# --- 3. PARAMETRİK VERİTABANI ---
+# --- 3. PARAMETRİK VERİTABANI (Düzeltilmiş İç Açılar: 90°) ---
 TOOL_DB = {
     "holder": {"w": 200.0, "h": 100.0},
     "punches": {
-        "Standart Bıçak (15mm)": {"w": 15.0, "angle": 135.0, "h": 100.0}
+        "Standart Bıçak (15mm, 90°)": {"w": 15.0, "angle": 90.0, "h": 100.0}
     },
     "dies": {
-        "Kalıp V15 (135°)": {"v_width": 15.0, "angle": 135.0, "w": 60.0, "h": 75.0},
-        "Kalıp V25 (135°)": {"v_width": 25.0, "angle": 135.0, "w": 60.0, "h": 75.0},
-        "Kalıp V50 (135°)": {"v_width": 50.0, "angle": 135.0, "w": 60.0, "h": 75.0}
+        "Kalıp V15 (90°)": {"v_width": 15.0, "angle": 90.0, "w": 60.0, "h": 75.0},
+        "Kalıp V25 (90°)": {"v_width": 25.0, "angle": 90.0, "w": 60.0, "h": 75.0},
+        "Kalıp V50 (90°)": {"v_width": 50.0, "angle": 90.0, "w": 60.0, "h": 75.0}
     }
 }
 
@@ -135,15 +137,12 @@ def generate_expert_geometry(lengths, angles, dirs, thickness, inner_radius, tar
 
 # --- 5. OTONOM VEKTÖR AÇIORTAY (BISECTOR) MOTORU ---
 def align_expert_press(x, y, centers, step_seq, th, bends_data, current_frame_angle, die_height, stroke_depth):
-    """Manuel flip komutlarını kaldırıp, vektör açıortayını hesaplayarak sacı otonom şekilde V-Kanalına kilitler."""
     c_data = next((c for c in centers if c['seq'] == step_seq), centers[0])
     idx = bends_data['seq'].index(step_seq)
     
-    # Parçayı merkeze (Apex) taşı
     nx = np.array(x) - c_data['x']
     ny = np.array(y) - c_data['y']
     
-    # 1. Gelen ve Giden Vektörlerin Açılarını Bul
     a_ref = c_data['angle_pre']
     b_dir = bends_data['dirs'][idx]
     
@@ -151,28 +150,25 @@ def align_expert_press(x, y, centers, step_seq, th, bends_data, current_frame_an
     if b_dir == "DOWN": dev = -dev
     a_out = a_ref + np.radians(dev)
     
-    u1_angle = a_ref + np.pi  # Apex'ten gelen flanşa doğru
-    u2_angle = a_out          # Apex'ten giden flanşa doğru
+    u1_angle = a_ref + np.pi 
+    u2_angle = a_out         
     
     u1 = np.array([np.cos(u1_angle), np.sin(u1_angle)])
     u2 = np.array([np.cos(u2_angle), np.sin(u2_angle)])
     
-    # 2. Açıortayı (Bisector) Hesapla
     v_bisect = u1 + u2
     
     if np.linalg.norm(v_bisect) < 1e-5:
-        bisect_angle = u1_angle + np.pi/2  # 180 derece (düz) durumu için güvenlik
+        bisect_angle = u1_angle + np.pi/2 
     else:
         bisect_angle = np.arctan2(v_bisect[1], v_bisect[0])
         
-    # 3. Açıortayı Kusursuz Şekilde Bıçağa (+Y Ekseni / 90 Derece) Hizala
     rot_angle = np.pi/2 - bisect_angle
     
     cos_t, sin_t = np.cos(rot_angle), np.sin(rot_angle)
     rx = nx * cos_t - ny * sin_t
     ry = nx * sin_t + ny * cos_t
     
-    # Derinliğe (stroke_depth) oturt
     return rx.tolist(), (ry + die_height - stroke_depth + th/2.0).tolist()
 
 def add_smart_dims_detailed(fig, px, py, lengths):
@@ -200,7 +196,6 @@ with st.sidebar:
     st.divider()
     st.session_state.bending_data["lengths"][0] = st.number_input("L0 (Ana Flanş)", value=float(st.session_state.bending_data["lengths"][0]), step=1.0)
     
-    # Flip X ve Y butonları sadeleştirilmiş arayüzden çıkarıldı.
     for i in range(len(st.session_state.bending_data["angles"])):
         with st.expander(f"Büküm {i+1} (Sıra: {st.session_state.bending_data['seq'][i]})", expanded=True):
             cl, ca, cd, csq = st.columns([1.2, 1, 1.2, 1])
@@ -246,7 +241,6 @@ with tab2:
     if not cur_a: 
         st.info("Lütfen büküm ekleyin.")
     else:
-        # Menüden 'Hazırlık' kaldırıldı, doğrudan sıralı bükümler gösteriliyor
         sorted_seqs = sorted(list(set(st.session_state.bending_data["seq"])))
         steps = [f"Büküm Adımı (Sıra {s})" for s in sorted_seqs]
         
@@ -261,10 +255,8 @@ with tab2:
         with col_start:
             st.markdown("<h4 style='text-align: center; color: #475569;'>Büküm Başlangıcı</h4>", unsafe_allow_html=True)
             
-            # frame=0 (Başlangıç, Düz Sac)
             gx_start, gy_start, g_centers_start = generate_expert_geometry(cur_l, cur_a, cur_d, th_val, rd_val, active_seq_val, 0.0)
             
-            # Başlangıç hizalaması
             fx_start, fy_start = align_expert_press(gx_start, gy_start, g_centers_start, active_seq_val, th_val, st.session_state.bending_data, 180.0, die_h, stroke_depth=0.0)
             punch_y_start = die_h + th_val 
             
@@ -281,13 +273,10 @@ with tab2:
             idx = st.session_state.bending_data["seq"].index(active_seq_val)
             target_a = cur_a[idx]
             
-            # Bıçağın V-Kanal içindeki ineceği tam derinlik
+            # Kalıbın tam derinliğine inen formül (90 derece iç açıya göre)
             stroke_depth_end = (d_inf['v_width'] / 2.0) * np.tan(np.radians((180.0 - target_a) / 2.0))
             
-            # frame=1.0 (Bitiş, Bükülmüş Sac)
             gx_end, gy_end, g_centers_end = generate_expert_geometry(cur_l, cur_a, cur_d, th_val, rd_val, active_seq_val, 1.0)
-            
-            # Otonom Vektör Hizalaması (Açıortay Kilidi)
             fx_end, fy_end = align_expert_press(gx_end, gy_end, g_centers_end, active_seq_val, th_val, st.session_state.bending_data, target_a, die_h, stroke_depth_end)
             punch_y_end = die_h + th_val - stroke_depth_end
             
@@ -296,5 +285,4 @@ with tab2:
             fig_end.add_trace(go.Scatter(x=fx_end, y=fy_end, fill='toself', fillcolor='#3b82f6', line=dict(color='black', width=1.5), mode='lines', name="Sac"))
             fig_end.update_layout(height=650, plot_bgcolor="#f8fafc", xaxis=dict(visible=False, range=[-150, 150]), yaxis=dict(visible=False, range=[-50, 300], scaleanchor="x", scaleratio=1), margin=dict(l=0, r=0, t=0, b=0), showlegend=False)
             
-            # Hata ekranı sorununu çözen tek (Unique) basım
             st.plotly_chart(fig_end, use_container_width=True)
