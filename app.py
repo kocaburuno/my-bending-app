@@ -63,8 +63,7 @@ TOOL_DB = {
 
 if "bending_data" not in st.session_state:
     st.session_state.bending_data = {
-        "lengths": [50.0, 50.0, 50.0], "angles": [90.0, 90.0], "dirs": ["UP", "DOWN"],
-        "seq": [1, 2], "flip_x": [False, True], "flip_y": [False, False]
+        "lengths": [50.0, 50.0, 50.0], "angles": [90.0, 90.0], "dirs": ["UP", "DOWN"], "seq": [1, 2]
     }
 
 # --- 4. HESAPLAMA MOTORLARI ---
@@ -134,60 +133,46 @@ def generate_expert_geometry(lengths, angles, dirs, thickness, inner_radius, tar
 
     return top_x + bot_x[::-1] + [top_x[0]], top_y + bot_y[::-1] + [top_y[0]], bend_centers
 
-# --- 5. VEKTÖR AÇIORTAY (BISECTOR) MOTORU ---
+# --- 5. OTONOM VEKTÖR AÇIORTAY (BISECTOR) MOTORU ---
 def align_expert_press(x, y, centers, step_seq, th, bends_data, current_frame_angle, die_height, stroke_depth):
-    """Büküm anında oluşan her iki kanadın vektörlerini hesaplayıp sacı kusursuz simetriye kilitler."""
+    """Manuel flip komutlarını kaldırıp, vektör açıortayını hesaplayarak sacı otonom şekilde V-Kanalına kilitler."""
     c_data = next((c for c in centers if c['seq'] == step_seq), centers[0])
     idx = bends_data['seq'].index(step_seq)
     
-    # Parçayı orijine al
+    # Parçayı merkeze (Apex) taşı
     nx = np.array(x) - c_data['x']
     ny = np.array(y) - c_data['y']
+    
+    # 1. Gelen ve Giden Vektörlerin Açılarını Bul
     a_ref = c_data['angle_pre']
+    b_dir = bends_data['dirs'][idx]
     
-    # Vektör açılarını belirle (Gelen ve Giden flanşlar)
-    theta_in = a_ref + np.pi
-    turn = np.radians(180.0 - current_frame_angle)
-    if bends_data['dirs'][idx] == "DOWN":
-        turn = -turn
-    theta_out = a_ref + turn
+    dev = 180.0 - current_frame_angle
+    if b_dir == "DOWN": dev = -dev
+    a_out = a_ref + np.radians(dev)
     
-    is_down = bends_data['dirs'][idx] == "DOWN"
-    fx = bends_data['flip_x'][idx]
-    fy = bends_data['flip_y'][idx]
+    u1_angle = a_ref + np.pi  # Apex'ten gelen flanşa doğru
+    u2_angle = a_out          # Apex'ten giden flanşa doğru
     
-    # Geometrik Taklaları Uygula
-    if is_down: ny = -ny
-    if fx: nx = -nx
-    if fy: ny = -ny
-        
-    def transform_angle(theta):
-        vx, vy = np.cos(theta), np.sin(theta)
-        if is_down: vy = -vy
-        if fx: vx = -vx
-        if fy: vy = -vy
-        return np.arctan2(vy, vx)
-        
-    t_in = transform_angle(theta_in)
-    t_out = transform_angle(theta_out)
+    u1 = np.array([np.cos(u1_angle), np.sin(u1_angle)])
+    u2 = np.array([np.cos(u2_angle), np.sin(u2_angle)])
     
-    # Açıortayı (Bisector) Bul ve 90 Dereceye (UP) Kilitle
-    v_in = np.array([np.cos(t_in), np.sin(t_in)])
-    v_out = np.array([np.cos(t_out), np.sin(t_out)])
-    v_bisect = v_in + v_out
+    # 2. Açıortayı (Bisector) Hesapla
+    v_bisect = u1 + u2
     
     if np.linalg.norm(v_bisect) < 1e-5:
-        rot_offset = np.pi - t_in
+        bisect_angle = u1_angle + np.pi/2  # 180 derece (düz) durumu için güvenlik
     else:
         bisect_angle = np.arctan2(v_bisect[1], v_bisect[0])
-        rot_offset = np.pi/2 - bisect_angle
         
-    # Kusursuz Rotasyonu Uygula
-    cos_t, sin_t = np.cos(rot_offset), np.sin(rot_offset)
+    # 3. Açıortayı Kusursuz Şekilde Bıçağa (+Y Ekseni / 90 Derece) Hizala
+    rot_angle = np.pi/2 - bisect_angle
+    
+    cos_t, sin_t = np.cos(rot_angle), np.sin(rot_angle)
     rx = nx * cos_t - ny * sin_t
     ry = nx * sin_t + ny * cos_t
     
-    # V-Kanal derinliğine oturt
+    # Derinliğe (stroke_depth) oturt
     return rx.tolist(), (ry + die_height - stroke_depth + th/2.0).tolist()
 
 def add_smart_dims_detailed(fig, px, py, lengths):
@@ -214,25 +199,24 @@ with st.sidebar:
     
     st.divider()
     st.session_state.bending_data["lengths"][0] = st.number_input("L0 (Ana Flanş)", value=float(st.session_state.bending_data["lengths"][0]), step=1.0)
+    
+    # Flip X ve Y butonları sadeleştirilmiş arayüzden çıkarıldı.
     for i in range(len(st.session_state.bending_data["angles"])):
         with st.expander(f"Büküm {i+1} (Sıra: {st.session_state.bending_data['seq'][i]})", expanded=True):
-            cl, ca, cd = st.columns([1.2, 1, 1.2])
+            cl, ca, cd, csq = st.columns([1.2, 1, 1.2, 1])
             st.session_state.bending_data["lengths"][i+1] = cl.number_input("L", value=st.session_state.bending_data["lengths"][i+1], key=f"L{i}")
             st.session_state.bending_data["angles"][i] = ca.number_input("A°", value=st.session_state.bending_data["angles"][i], key=f"A{i}")
             st.session_state.bending_data["dirs"][i] = cd.selectbox("Yön", ["UP", "DOWN"], index=0 if st.session_state.bending_data["dirs"][i]=="UP" else 1, key=f"D{i}")
-            csq, cfx, cfy = st.columns([1, 1, 1])
             st.session_state.bending_data["seq"][i] = csq.number_input("Sıra", value=int(st.session_state.bending_data["seq"][i]), step=1, key=f"S{i}")
-            st.session_state.bending_data["flip_x"][i] = cfx.checkbox("Flip X", value=st.session_state.bending_data["flip_x"][i], key=f"FX{i}")
-            st.session_state.bending_data["flip_y"][i] = cfy.checkbox("Takla Y", value=st.session_state.bending_data["flip_y"][i], key=f"FY{i}")
 
     st.divider()
     c_btn1, c_btn2 = st.columns(2)
     if c_btn1.button("➕ EKLE"):
         st.session_state.bending_data["lengths"].append(50.0); st.session_state.bending_data["angles"].append(90.0); st.session_state.bending_data["dirs"].append("UP")
-        st.session_state.bending_data["seq"].append(len(st.session_state.bending_data["angles"])); st.session_state.bending_data["flip_x"].append(False); st.session_state.bending_data["flip_y"].append(False)
+        st.session_state.bending_data["seq"].append(len(st.session_state.bending_data["angles"]))
         st.rerun()
     if c_btn2.button("🗑️ SİL") and len(st.session_state.bending_data["angles"]) > 0:
-        for k in ["lengths", "angles", "dirs", "seq", "flip_x", "flip_y"]: st.session_state.bending_data[k].pop()
+        for k in ["lengths", "angles", "dirs", "seq"]: st.session_state.bending_data[k].pop()
         st.rerun()
 
 # --- 7. ANA GÖRÜNTÜ ---
@@ -262,9 +246,12 @@ with tab2:
     if not cur_a: 
         st.info("Lütfen büküm ekleyin.")
     else:
+        # Menüden 'Hazırlık' kaldırıldı, doğrudan sıralı bükümler gösteriliyor
         sorted_seqs = sorted(list(set(st.session_state.bending_data["seq"])))
-        steps = ["Hazırlık"] + [f"Büküm Adımı (Sıra {s})" for s in sorted_seqs]
+        steps = [f"Büküm Adımı (Sıra {s})" for s in sorted_seqs]
+        
         sim_idx = steps.index(st.selectbox("İncelenecek Adımı Seçin", steps, index=0))
+        active_seq_val = sorted_seqs[sim_idx]
         
         col_start, col_end = st.columns(2)
         p_inf, d_inf, h_inf = TOOL_DB["punches"][sel_punch], TOOL_DB["dies"][sel_die], TOOL_DB["holder"]
@@ -273,43 +260,41 @@ with tab2:
         # --- SOL KARE: BÜKÜM BAŞLANGICI ---
         with col_start:
             st.markdown("<h4 style='text-align: center; color: #475569;'>Büküm Başlangıcı</h4>", unsafe_allow_html=True)
-            active_seq_val = sorted_seqs[sim_idx - 1] if sim_idx > 0 else 0
             
-            gx_start, gy_start, g_centers = generate_expert_geometry(cur_l, cur_a, cur_d, th_val, rd_val, active_seq_val, 0.0)
+            # frame=0 (Başlangıç, Düz Sac)
+            gx_start, gy_start, g_centers_start = generate_expert_geometry(cur_l, cur_a, cur_d, th_val, rd_val, active_seq_val, 0.0)
             
-            if sim_idx == 0:
-                mid = len(gx_start)//4; fx_start = [v - gx_start[mid] for v in gx_start]; fy_start = [v + die_h + th_val/2.0 for v in gy_start]
-            else:
-                fx_start, fy_start = align_expert_press(gx_start, gy_start, g_centers, active_seq_val, th_val, st.session_state.bending_data, 180.0, die_h, stroke_depth=0.0)
-                
+            # Başlangıç hizalaması
+            fx_start, fy_start = align_expert_press(gx_start, gy_start, g_centers_start, active_seq_val, th_val, st.session_state.bending_data, 180.0, die_h, stroke_depth=0.0)
             punch_y_start = die_h + th_val 
             
             fig_start = go.Figure()
             draw_tools(fig_start, p_inf, d_inf, h_inf, punch_y_start)
-            fig_start.add_trace(go.Scatter(x=fx_start, y=fy_start, fill='toself', fillcolor='#3b82f6', line=dict(color='black', width=1.5), mode='lines', name="Sac"))
+            fig_start.add_trace(go.Scatter(x=fx_start, y=fy_start, fill='toself', fillcolor='#3b82f6', line=dict(color='#1e3a8a', width=1.5), mode='lines', name="Sac"))
             fig_start.update_layout(height=650, plot_bgcolor="#f8fafc", xaxis=dict(visible=False, range=[-150, 150]), yaxis=dict(visible=False, range=[-50, 300], scaleanchor="x", scaleratio=1), margin=dict(l=0, r=0, t=0, b=0), showlegend=False)
             st.plotly_chart(fig_start, use_container_width=True)
 
         # --- SAĞ KARE: BÜKÜM BİTİŞİ ---
         with col_end:
             st.markdown("<h4 style='text-align: center; color: #1e3a8a;'>Büküm Bitişi</h4>", unsafe_allow_html=True)
-            if sim_idx == 0:
-                st.plotly_chart(fig_start, use_container_width=True) 
-            else:
-                idx = st.session_state.bending_data["seq"].index(active_seq_val)
-                target_a = cur_a[idx]
-                
-                stroke_depth_end = (d_inf['v_width'] / 2.0) * np.tan(np.radians((180.0 - target_a) / 2.0))
-                
-                gx_end, gy_end, g_centers = generate_expert_geometry(cur_l, cur_a, cur_d, th_val, rd_val, active_seq_val, 1.0)
-                fx_end, fy_end = align_expert_press(gx_end, gy_end, g_centers, active_seq_val, th_val, st.session_state.bending_data, target_a, die_h, stroke_depth_end)
-                
-                punch_y_end = die_h + th_val - stroke_depth_end
-                
-                fig_end = go.Figure()
-                draw_tools(fig_end, p_inf, d_inf, h_inf, punch_y_end)
-                # Çarpışma rengi (kırmızı) kaldırıldı, daima standart renk
-                fig_end.add_trace(go.Scatter(x=fx_end, y=fy_end, fill='toself', fillcolor='#3b82f6', line=dict(color='black', width=1.5), mode='lines', name="Sac"))
-                
-                fig_end.update_layout(height=650, plot_bgcolor="#f8fafc", xaxis=dict(visible=False, range=[-150, 150]), yaxis=dict(visible=False, range=[-50, 300], scaleanchor="x", scaleratio=1), margin=dict(l=0, r=0, t=0, b=0), showlegend=False)
-                st.plotly_chart(fig_end, use_container_width=True)
+            
+            idx = st.session_state.bending_data["seq"].index(active_seq_val)
+            target_a = cur_a[idx]
+            
+            # Bıçağın V-Kanal içindeki ineceği tam derinlik
+            stroke_depth_end = (d_inf['v_width'] / 2.0) * np.tan(np.radians((180.0 - target_a) / 2.0))
+            
+            # frame=1.0 (Bitiş, Bükülmüş Sac)
+            gx_end, gy_end, g_centers_end = generate_expert_geometry(cur_l, cur_a, cur_d, th_val, rd_val, active_seq_val, 1.0)
+            
+            # Otonom Vektör Hizalaması (Açıortay Kilidi)
+            fx_end, fy_end = align_expert_press(gx_end, gy_end, g_centers_end, active_seq_val, th_val, st.session_state.bending_data, target_a, die_h, stroke_depth_end)
+            punch_y_end = die_h + th_val - stroke_depth_end
+            
+            fig_end = go.Figure()
+            draw_tools(fig_end, p_inf, d_inf, h_inf, punch_y_end)
+            fig_end.add_trace(go.Scatter(x=fx_end, y=fy_end, fill='toself', fillcolor='#3b82f6', line=dict(color='black', width=1.5), mode='lines', name="Sac"))
+            fig_end.update_layout(height=650, plot_bgcolor="#f8fafc", xaxis=dict(visible=False, range=[-150, 150]), yaxis=dict(visible=False, range=[-50, 300], scaleanchor="x", scaleratio=1), margin=dict(l=0, r=0, t=0, b=0), showlegend=False)
+            
+            # Hata ekranı sorununu çözen tek (Unique) basım
+            st.plotly_chart(fig_end, use_container_width=True)
